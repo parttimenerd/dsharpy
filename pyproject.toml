@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "dsharpy"
+version = "0.1.0"
+description = "A #SAT solver with dependencies"
+authors = ["Johannes Bechberger <johannes.bechberger@kit.edu>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+python-sat = "^0.1.6-alpha.11"
+click = "^7.1.2"
+prettyprinter = "^0.18.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+dsharpy = "dsharpy.counter:cli"
