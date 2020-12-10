@@ -8,7 +8,7 @@ from typing import Tuple, Set, List, Dict, Optional, Union
 import click as click
 from prettyprinter import register_pretty, pretty_call
 
-from dsharpy.formula import Independents, blast_xor, count_sat, DCNF, sum_is_one2, sum_is_one4
+from dsharpy.formula import Independents, blast_xor, count_sat, DCNF, sum_is_one2, sum_is_one4, sat
 from dsharpy.util import random_exact_split, random_choice, pprint, random_seed
 
 Dep = Tuple[int, int]
@@ -234,6 +234,8 @@ class State:
         return max_count
 
     def compute_loop(self, runs: int = 3) -> float:
+        if not sat(self.cnf):
+            return -1
         counts: List[float] = []
         for run in range(runs):
             count = self.compute()
@@ -268,7 +270,11 @@ def cli(file, parallelism, amc_epsilon, amc_delta, amc_forcesolextension, verbos
                                    epsilon=epsilon,
                                    delta=delta))
     random_seed(random)
-    print(f"c {state.compute_loop(iterations)}")
+    ret = state.compute_loop(iterations)
+    if ret >= 0:
+        print(f"c count {ret}")
+    else:
+        print(f"c unsatisfiable")
 
 
 if __name__ == '__main__':
