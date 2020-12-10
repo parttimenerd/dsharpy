@@ -47,6 +47,23 @@ The additionial features are realized via comments:
 
 See for examples in ``tests/cases``.
 
+
+MaxCount
+--------
+It also contains a fork of https://github.com/dfremont/maxcount that supports approximately solving
+a DCNF based MAX#SAT problem.
+
+The only addition to prior described format is that the maximation variables can
+be specified via
+
+.. code::
+
+  c max var_1 … var_n 0
+
+
+Attention: It is only a really rough modification of the original code
+
+
 TODO
 ----
 - using the passed epsilon and delta values to compute the amc_epsilon, the amc_delta and the number of iterations

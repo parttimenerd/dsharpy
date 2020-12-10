@@ -19,3 +19,4 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 dsharpy = "dsharpy.counter:cli"
+maxcount = "dsharpy.maxcount.maxcount:cli"

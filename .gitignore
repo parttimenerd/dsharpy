@@ -3,3 +3,7 @@
 *cusp*
 .idea
 **/__pycache__
+**/*.cnf.*count
+**/*.cnf.*log
+**/*.cnf.*out
+**/*.cnf.*fold
