@@ -119,7 +119,7 @@ class TestFile:
     @staticmethod
     def check_file(file: Path, config: Config = None):
         cnf = DCNF.load(file)
-        actual = State.from_dcnf(cnf, config).compute()
+        actual = State.from_dcnf(cnf, config).compute_loop()
         if exp_comment := cnf.get_comment("test count"):
             expected = eval(exp_comment.split(" ")[-1])
             assert actual == expected
