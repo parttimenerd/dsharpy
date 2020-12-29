@@ -42,11 +42,14 @@ Comments can be added by prefixing a line with ``c``.
 The additionial features are realized via comments:
 
 - c ind [variables to count models] 0
-- c dep a b_1 … b_n 0
-    - tells the counter to assume that there is arbitrary relation between a and b_1, …, b_n
+- c dep a_1 … a_n 0 b_1 … b_m 0
+    - tells the counter to assume that there is arbitrary relation between a_1, …, a_n and b_1, …, b_m
 - c par a_1 b_1 a_2 b_2 …
     - asserts that the relations a_i ~> b_i don't affect each other
-    - helps to improve the performance of the counter
+    - might help improve the performance of the counter
+    - should later be inferred
+
+Attention: The different ``dep`` comments might have to have pairwise disjunct left and right sides each
 
 See for examples in ``tests/cases``.
 
@@ -56,7 +59,7 @@ MaxCount
 It also contains a fork of https://github.com/dfremont/maxcount that supports approximately solving
 a DCNF based MAX#SAT problem.
 
-The only addition to prior described format is that the maximation variables can
+The only addition to prior described format is that the maximization variables can
 be specified via
 
 .. code::
@@ -71,5 +74,5 @@ TODO
 ----
 - using the passed epsilon and delta values to compute the amc_epsilon, the amc_delta and the number of iterations
 - larger test cases
-- preprocessing
-- faster algorithm (more heuristics, …)
+- more preprocessing (find independent parts, …)
+- implement new algorithms

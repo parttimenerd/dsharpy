@@ -56,7 +56,7 @@ def test_basic_compute():
 p cnf 0 2
 1 2 0
 c ind 1 2 0
-c dep 2 1
+c dep 2 0 1
 """
     random_seed(10)
     val = State.from_string(string).compute()
@@ -122,7 +122,7 @@ class TestFile:
     @staticmethod
     def check_file(file: Path, config: Config = None):
         cnf = DCNF.load(file)
-        actual = State.from_dcnf(cnf, config).compute_loop(5)
+        actual = State.from_dcnf(cnf, config).compute_loop(1)
         if exp_comment := cnf.get_comment("test count"):
             expected = eval(exp_comment.split(" ")[-1])
             assert actual == expected

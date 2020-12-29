@@ -10,11 +10,10 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any
 
-from dsharpy import convert
-
 
 def binary_path(program: str) -> Path:
     return Path(__file__).parent.parent.absolute() / "util" / program
+
 
 T = TypeVar("T")
 
@@ -112,5 +111,6 @@ def process_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3) -> Path:
     err = res.stderr.decode()
     if "Failed" in err or "Usage" in err:
         raise BaseException("CBMC: " + err)
+    from dsharpy import convert
     convert.Graph.process(out_path, cnf_path)
     return cnf_path

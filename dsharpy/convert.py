@@ -5,9 +5,11 @@ import itertools
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple
+from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple, Deque
 
 import click
+
+from dsharpy.formula import DCNF
 
 
 @dataclass
@@ -32,7 +34,7 @@ T = TypeVar("T")
 
 def bfs(start: Iterable[T], visit: Callable[[T], Optional[Iterable[T]]]):
     visited: Set[T] = set()
-    deq = deque()
+    deq: Deque[T] = deque()
     deq.extend(start)
     while len(deq) > 0:
         top = deq.pop()
@@ -84,26 +86,25 @@ class VarNode:
     def __repr__(self):
         return f"VarNode({self})"
 
+
+def var_nodes_to_ints(var_nodes: Iterable[VarNode]) -> Iterable[int]:
+    return (v.sat_var for o in var_nodes for v in o.sat_vars)
+
+
 @dataclass
 class LoopIter:
 
     inner: List[VarNode]
     outer: List[VarNode]
 
-    def compute_dependencies(self) -> List[Tuple[int, List[int]]]:
+    def compute_dependencies(self) -> Tuple[Iterable[int], Iterable[int]]:
         """ requires that set_var_deps has been called on all VarNodes before """
-        ret = []
-        for o in self.outer:
-            inner = o.compute_others(self.inner, self.outer)
-            print(f"{o} -> {inner}")
-            inner_sat = [s.sat_var for i in inner for s in i.sat_vars]
-            for s in o.sat_vars:
-                ret.append((s, inner_sat))
-        return ret
+        meta_node = VarNode("meta", [v for o in self.outer for v in o.sat_vars], [])
+        return set(var_nodes_to_ints(self.outer)), var_nodes_to_ints(meta_node.compute_others(self.inner, self.outer))
 
-    def compute_dependency_strings(self) -> List[str]:
+    def compute_dependency_strings(self) -> str:
         """ requires that set_var_deps has been called on all VarNodes before """
-        return [f"c dep {a} {' '.join(map(str, bs))} 0" for a, bs in self.compute_dependencies()]
+        return DCNF.format_dep_comment(*self.compute_dependencies())
 
 
 @dataclass
@@ -112,15 +113,11 @@ class AbortedRecursion:
     returns: List[VarNode]
     params: List[VarNode]
 
-    def compute_dependencies(self) -> List[Tuple[int, List[int]]]:
-        return [(p_var.sat_var, [r_var.sat_var
-                                 for r in self.returns
-                                 for r_var in r.sat_vars])
-                for p in self.params
-                for p_var in p.sat_vars]
+    def compute_dependencies(self) -> Tuple[Iterable[int], Iterable[int]]:
+        return var_nodes_to_ints(self.params), var_nodes_to_ints(self.returns)
 
-    def compute_dependency_strings(self) -> List[str]:
-        return [f"c dep {a} {' '.join(map(str, bs))} 0" for a, bs in self.compute_dependencies()]
+    def compute_dependency_strings(self) -> str:
+        return DCNF.format_dep_comment(*self.compute_dependencies())
 
 
 class Graph:
@@ -231,7 +228,7 @@ class Graph:
                     lines.append(line)
         graph.update_var_deps()
         for loop_iter in graph.loop_iters + graph.recursions:
-            lines.extend(loop_iter.compute_dependency_strings())
+            lines.append(loop_iter.compute_dependency_strings())
         with outfile.open("w") as f:
             f.writelines(line + "\n" for line in lines)
 

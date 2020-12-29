@@ -5,17 +5,18 @@ D#SAT specific comments.
 import copy
 import re
 import subprocess
+import sys
 import tempfile
 from collections import deque
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Dict, Set, Tuple, Optional, Union
+from typing import List, Dict, Set, Tuple, Optional, Union, FrozenSet, Iterable
 
 from pysat.formula import CNF
 
 from dsharpy.util import binary_path
 
-Deps = Dict[int, Set[int]]
+Deps = Dict[FrozenSet[int], Set[int]]
 Independents = List[Set[Tuple[int, int]]]
 
 
@@ -32,7 +33,7 @@ class DCNF(CNF):
 
     def _update_comments(self, new_ind: List[int], new_deps: Deps, new_indies: Independents):
         self.comments.append("c ind " + " ".join(map(str, new_ind)) + " 0")
-        self.comments.extend(f"c dep {a} {' '.join(map(str, b))} 0" for a, b in new_deps)
+        self.comments.extend(self.format_dep_comment(a, b) for a, b in new_deps)
         self.comments.extend(f"c indies {' '.join(map(lambda s: f'{s[0]} {s[1]}', i))}" for i in new_indies)
 
     def _clean_up_comments(self):
@@ -45,19 +46,22 @@ class DCNF(CNF):
 
     def _parse_comments(self, comments: List[str]) -> Tuple[Set[int], Deps, Independents]:
         ind = set()
-        deps = {}
+        deps: Deps = {}
         indies = []
         for c in comments:
             if not self._is_special_comment(c):
                 continue
-            ints = list(int(e) for e in c[6:].split(" ") if e != "0")
+            ints = list(int(e) for e in c[6:].split(" "))
+            if ints[-1] == 0:
+                ints = ints[:-1]
             if c.startswith("c ind "):
                 ind.update(ints)
             elif c.startswith("c dep "):
-                a = ints[0]
-                if a not in deps:
-                    deps[a] = set()
-                deps[a].update(ints[1:])
+                ints1, ints2 = ints[:ints.index(0)], ints[ints.index(0) + 1:]
+                a_s = frozenset(ints1)
+                if a_s not in deps:
+                    deps[a_s] = set()
+                deps[a_s].update(ints2)
             else:
                 tmp = set()
                 for i in range(0, len(ints), 2):
@@ -85,19 +89,23 @@ class DCNF(CNF):
         self.comments.append(f"c ind {' '.join(map(str, diff))} 0")
         self.nv = max(self.nv, max(diff))
 
-    def add_dep(self, a: int, bs: Set[int]):
+    def add_dep(self, a_s: FrozenSet[int], bs: Set[int]):
         to_add = []
-        if a not in self.deps:
-            self.deps[a] = bs
+        if a_s not in self.deps:
+            self.deps[a_s] = bs
             to_add = bs
         else:
-            old = self.deps[a]
+            old = self.deps[a_s]
             for b in bs:
                 if b not in old:
                     old.add(b)
                     to_add.append(b)
-        self.comments.append(f"c dep {a} {' '.join(map(str, to_add))} 0")
-        self.nv = max(self.nv, max(a, max(to_add)))
+        self.comments.append(self.format_dep_comment(a_s, to_add))
+        self.nv = max(self.nv, max(max(a_s), max(to_add)))
+
+    @staticmethod
+    def format_dep_comment(a_s: Iterable[int], bs: Iterable[int]) -> str:
+        return f"c dep {' '.join(map(str, a_s))} 0 {' '.join(map(str, bs))} 0"
 
     @staticmethod
     def _is_special_comment(comment: str) -> bool:
@@ -144,7 +152,8 @@ class DCNF(CNF):
         return None
 
     def get_dep_relations(self) -> List[Tuple[int, int]]:
-        return [(a, b) for a, bs in self.deps.items() for b in bs]
+        print([(a, b) for a_s, bs in self.deps.items() for b in bs for a in a_s])
+        return [(a, b) for a_s, bs in self.deps.items() for b in bs for a in a_s]
 
     @staticmethod
     def load(path: Path) -> 'DCNF':
@@ -232,7 +241,7 @@ def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float 
                 file = f"{folder}/{i}.cnf"
                 cnf = trim_dcnf(cnf)
                 cnf.to_file(file)
-                # cnf.to_fp(sys.stdout)
+                #cnf.to_fp(sys.stdout)
                 files.append(file)
             processes = [subprocess.Popen(
                 f"{binary_path('approxmc4')} {file} {' '.join(f'--{k} {v}' for k, v in options.items())}",
