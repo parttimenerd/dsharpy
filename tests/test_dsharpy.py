@@ -75,6 +75,9 @@ class TestFile:
     def test_test1(self):
         self.check_case("test1.cnf")
 
+    def test_test5(self):
+        self.check_case("test5.cnf")
+
     def test_indies(self):
         self.check_case("test1b_indies.cnf")
 

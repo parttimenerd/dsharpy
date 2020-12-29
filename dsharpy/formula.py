@@ -5,8 +5,8 @@ D#SAT specific comments.
 import copy
 import re
 import subprocess
-import sys
 import tempfile
+from collections import deque
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import List, Dict, Set, Tuple, Optional, Union
@@ -107,7 +107,7 @@ class DCNF(CNF):
         super().from_fp(file_pointer, comment_lead)
         self.ind = set()
         self.deps = {}
-        self._update_from_comments(self.comments, ignore_self = True)
+        self._update_from_comments(self.comments, ignore_self=True)
 
     def copy(self) -> 'DCNF':
         """ Copy the CNF """
@@ -212,23 +212,16 @@ def _parse_amc_out(out: str, err: str) -> Optional[float]:
         return None
 
 
-def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float = 0.2, forcesolextension: bool = False,
-              _use_newest: bool = True) -> Union[List[Optional[float]], Optional[float]]:
+def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float = 0.2, forcesolextension: bool = False)\
+        -> Union[List[Optional[float]], Optional[float]]:
     """
     Run ApproxMC with the passed parameters. If multiple CNFs are passed, then these are executed in parallel.
     """
-    options = {}
-    if _use_newest:
-        # TODO: add options and recompile ApproxMC4
-        options = {
-            "epsilon": epsilon,
-            "delta": delta,
-            "forcesolextension": int(forcesolextension)
-        }
-    else:
-        options = {
-
-        }
+    options = {
+        "epsilon": epsilon,
+        "delta": delta,
+        "forcesolextension": int(forcesolextension)
+    }
     is_single = isinstance(cnfs, DCNF)
     if is_single:
         cnfs = [cnfs]
@@ -237,11 +230,12 @@ def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float 
             files = []
             for i, cnf in enumerate(cnfs):
                 file = f"{folder}/{i}.cnf"
+                cnf = trim_dcnf(cnf)
                 cnf.to_file(file)
-                #cnf.to_fp(sys.stderr)
+                # cnf.to_fp(sys.stdout)
                 files.append(file)
             processes = [subprocess.Popen(
-                f"{binary_path('approxmc4' if _use_newest else 'approxmc2')} {file} {' '.join(f'--{k} {v}' for k, v in options.items())}",
+                f"{binary_path('approxmc4')} {file} {' '.join(f'--{k} {v}' for k, v in options.items())}",
                 shell=True,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for file in files]
             ret = []
@@ -255,3 +249,43 @@ def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float 
         #     return count_sat(cnfs, epsilon=epsilon, delta=delta, forcesolextension=forcesolextension,
         #                      _use_newest=False)
         raise
+
+
+class CNFWrapper:
+
+    def __init__(self, cnf: CNF):
+        self.cnf = cnf
+        self.var_to_clauses: List[List[int]] = [[] for i in range(0, cnf.nv + 1)]
+        for i, clause in enumerate(cnf.clauses):
+            for var in clause:
+                self.var_to_clauses[abs(var)].append(i)
+
+    def sub_cnf(self, relevant_vars: List[int], copy_comments: bool = True) -> CNF:
+
+        visited_clauses: Set[int] = set()
+        visited_vars: Set[int] = set()
+
+        deq = deque()  # a deque of vars
+        deq.extend(relevant_vars)
+        while len(deq) > 0:
+            top = deq.pop()
+            if top in visited_vars:
+                continue
+            visited_vars.add(top)
+            deq.extendleft(set(abs(var) for clause in self.var_to_clauses[top] for var in self.cnf.clauses[clause]))
+            visited_clauses.update(self.var_to_clauses[top])
+
+        cnf = CNF()
+        if copy_comments:
+            cnf.comments = self.cnf.comments
+        cnf.from_clauses([self.cnf.clauses[c] for c in visited_clauses])
+        return cnf
+
+
+def trim_dcnf(cnf: DCNF) -> DCNF:
+    """ Removes all clauses """
+    new_cnf = CNFWrapper(cnf).sub_cnf(cnf.ind, copy_comments=True)
+    new_dcnf = DCNF(from_clauses=new_cnf.clauses, ind=cnf.ind, deps=cnf.deps, independents=cnf.independents)
+    new_dcnf.comments = cnf.comments
+    assert new_dcnf.independents == cnf.independents and new_dcnf.ind == cnf.ind
+    return new_dcnf
