@@ -1,0 +1,4 @@
+[submodule "util/cbmc"]
+	path = util/cbmc
+	url = git@git.scc.kit.edu:gp1285/cbmc.git
+	branch = dsharpy

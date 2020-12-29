@@ -1,15 +1,18 @@
 import math
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import median
+from tempfile import TemporaryDirectory
 from typing import Tuple, Set, List, Dict, Optional, Union
 
 import click as click
 from prettyprinter import register_pretty, pretty_call
 
-from dsharpy.formula import Independents, blast_xor, count_sat, DCNF, sum_is_one2, sum_is_one4, sat
-from dsharpy.util import random_exact_split, random_choice, pprint, random_seed
+from dsharpy.formula import Independents, count_sat, DCNF, sum_is_one2, sum_is_one4, sat
+from dsharpy.util import random_exact_split, random_choice, pprint, random_seed, process_with_cbmc, has_modified_cbmc
 
 Dep = Tuple[int, int]
 
@@ -134,7 +137,7 @@ class State:
                              self.deps, copy, self.volatile_deps))
         return tuple(ret)
 
-    def choose_and_split(self, depth: int = None) -> List['State']:
+    def choose_and_split(self, depth: Optional[int] = None) -> List['State']:
         """ Split the current state into 2^depth states """
         depth = math.log2(self.config.parallelism) if depth is None else depth
         if depth == 0 or not self.can_still_choose():
@@ -217,9 +220,8 @@ class State:
         if not cur.can_still_choose():
             return self._count_sat(self.to_cnf())
         while cur.can_still_choose():
-            states = cur.choose_and_split()
-            print(len(states))
-            ret = self._count_sat([state.to_cnf() for state in states])
+            states: List[State] = cur.choose_and_split()
+            ret: List[float] = self._count_sat([state.to_cnf() for state in states])
             if self.config.log_iterations:
                 pprint(states)
             ret2: List[float] = [r if r else -1 for r in ret]
@@ -233,21 +235,45 @@ class State:
             cur = states[ret2.index(max_count)]
         return max_count
 
-    def compute_loop(self, runs: int = 3) -> float:
+    def compute_loop(self, iterations: int) -> float:
         if not sat(self.cnf):
             return -1
         counts: List[float] = []
-        for run in range(runs):
+        for run in range(iterations):
             count = self.compute()
             counts.append(count)
             if self.config.log_iterations:
                 print(f"-- run {run:2d}: {count:3f}     median = {median(counts):3f}  max = {max(counts):3f}")
+
         return max(counts)
 
 
+@dataclass
+class PathWrapper:
 
-@click.command(name="dsharpy", help="An approximate model counter with dependencies based on ApproxMC")
-@click.argument('file')
+    path: Path
+    base: Optional[Path] = None
+
+    def __del__(self):
+        if self.base:
+            shutil.rmtree(self.base)
+
+
+def convert_if_necessary(ctx: click.Context, param: str, value: str) -> PathWrapper:
+    file = Path(value)
+    if file.suffix in [".c", ".cpp"]:
+        if not has_modified_cbmc():
+            raise BaseException("Install modified CBMC via update.sh")
+        temp = Path(tempfile.mkdtemp())
+        return PathWrapper(process_with_cbmc(file, temp), temp)
+    return PathWrapper(file)
+
+
+@click.command(name="dsharpy", help="""An approximate model counter with dependencies based on ApproxMC
+
+Supports DCNF and C/CPP files (if the modified CBMC is installed)
+""")
+@click.argument('file', type=click.Path(exists=True), callback=convert_if_necessary)
 @click.option('-p', '--parallelism', type=int, default=2, help="has to be a power of two larger than one")
 @click.option('--amc_epsilon', type=float, default=0.2)
 @click.option('--amc_delta', type=float, default=0.8)
@@ -257,11 +283,13 @@ class State:
 @click.option("--delta", type=float, default=0.8, help="Not yet implemented")
 @click.option("--random", default=lambda: os.urandom(100))
 @click.option("--iterations", type=int, default=5, help="number of loop iterations")
-def cli(file, parallelism, amc_epsilon, amc_delta, amc_forcesolextension, verbose,
+def cli(file: PathWrapper, parallelism, amc_epsilon, amc_delta, amc_forcesolextension, verbose,
         epsilon, delta, random, iterations):
+
     import warnings
     warnings.warn("--epsilon and --delta don't have any effect currently")
-    state = State.from_dcnf(DCNF.load(Path(file)),
+
+    state = State.from_dcnf(DCNF.load(file.path),
                             Config(parallelism=parallelism,
                                    amc_epsilon=amc_epsilon,
                                    amc_delta=amc_delta,

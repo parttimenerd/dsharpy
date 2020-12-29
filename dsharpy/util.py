@@ -1,9 +1,16 @@
 """ Utilities not directly related to formulas or CNFs """
 import copy
+import functools
+import os
 import random
 import secrets
+import subprocess
+import tempfile
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any
+
+from dsharpy import convert
 
 
 def binary_path(program: str) -> Path:
@@ -77,5 +84,33 @@ def random_choice(l: Union[Set[T], Sequence[T]]) -> T:
 
 def pprint(x: Any):
     import prettyprinter
-    prettyprinter.install_extras()
+    prettyprinter.install_extras(exclude=['django', 'ipython', 'ipython_repr_pretty'])
     prettyprinter.pprint(x)
+
+
+@functools.lru_cache()
+def modified_cbmc_path() -> Path:
+    return next(f for f in (Path(__file__).parent.parent / "util" / "cbmc" / "build").rglob("cbmc") if f.is_file()).absolute()
+
+
+def has_modified_cbmc() -> bool:
+    try:
+        subprocess.run([str(modified_cbmc_path()), "-h"], check=True, capture_output=False, stdout=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def process_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3) -> Path:
+    """ Returns the temporary CNF file """
+    if not c_file.exists():
+        raise FileNotFoundError(f"File {c_file} not found")
+    out_path = tmp_folder / c_file.name
+    cnf_path = tmp_folder / (c_file.name + ".cnf")
+    res = subprocess.run([str(modified_cbmc_path()), str(c_file.absolute()), "--unwind", str(unwind), "--dimacs"],
+                         stdout=out_path.open("w"), bufsize=-1, stderr=subprocess.PIPE)
+    err = res.stderr.decode()
+    if "Failed" in err or "Usage" in err:
+        raise BaseException("CBMC: " + err)
+    convert.Graph.process(out_path, cnf_path)
+    return cnf_path

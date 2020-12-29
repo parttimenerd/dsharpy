@@ -78,6 +78,8 @@ class DCNF(CNF):
         self.comments.extend(set(x for x in combined if not self._is_special_comment(x)))
 
     def add_ind(self, *ind: int):
+        if not ind:
+            return
         diff = set(ind) - self.ind
         self.ind.update(diff)
         self.comments.append(f"c ind {' '.join(map(str, diff))} 0")

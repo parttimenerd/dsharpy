@@ -9,6 +9,7 @@ python = "^3.8"
 python-sat = "^0.1.6-alpha.11"
 click = "^7.1.2"
 prettyprinter = "^0.18.0"
+scipy = "^1.5.4"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
@@ -20,3 +21,4 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.scripts]
 dsharpy = "dsharpy.counter:cli"
 maxcount = "dsharpy.maxcount.maxcount:cli"
+convert = "dsharpy.convert:cli"

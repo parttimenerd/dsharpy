@@ -38,5 +38,5 @@ def probability_of_greater_max(sample: List[float], delta: float, ov_max: float,
     return 1 - distr.cdf(val) / ov
 
 if __name__ == '__main__':
-    print(probability_of_greater_max([1,2,2,2,2,2,2,2,2,2,2,2], 1.1, 5))
+    print(probability_of_greater_max([2,2,2,2,2,2,2,2,2,2], 1.1, 5))
 

@@ -19,7 +19,10 @@ via https://python-poetry.org
 
     poetry install
 
-    poetry run dsharpy
+    poetry run dsharpy test.cnf
+
+    # if update.sh has been called (installing the custom CBMC)
+    poetry run dsharpy test.c
 
 Syntax of DCNF files
 --------------------
@@ -68,3 +71,5 @@ TODO
 ----
 - using the passed epsilon and delta values to compute the amc_epsilon, the amc_delta and the number of iterations
 - larger test cases
+- preprocessing
+- faster algorithm (more heuristics, …)
