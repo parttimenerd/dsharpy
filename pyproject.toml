@@ -10,9 +10,11 @@ python-sat = "^0.1.6-alpha.11"
 click = "^7.1.2"
 prettyprinter = "^0.18.0"
 scipy = "^1.5.4"
+pytest-clarity = "^0.3.0-alpha.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
+pytest-clarity = "^0.3"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

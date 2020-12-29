@@ -10,12 +10,13 @@ import tempfile
 from collections import deque
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Dict, Set, Tuple, Optional, Union, FrozenSet, Iterable
+from typing import List, Dict, Set, Tuple, Optional, Union, FrozenSet, Iterable, Deque
 
 from pysat.formula import CNF
 
 from dsharpy.util import binary_path
 
+Dep = Tuple[FrozenSet[int], Set[int]]
 Deps = Dict[FrozenSet[int], Set[int]]
 Independents = List[Set[Tuple[int, int]]]
 
@@ -31,9 +32,9 @@ class DCNF(CNF):
         self.independents = independents or []
         self._update_from_comments(self.comments)
 
-    def _update_comments(self, new_ind: List[int], new_deps: Deps, new_indies: Independents):
-        self.comments.append("c ind " + " ".join(map(str, new_ind)) + " 0")
-        self.comments.extend(self.format_dep_comment(a, b) for a, b in new_deps)
+    def _update_comments(self, new_ind: Iterable[int], new_deps: Deps, new_indies: Independents):
+        self.comments.append(self.format_ind_comment(new_ind))
+        self.comments.extend(self.format_dep_comment(a, b) for a, b in new_deps.items())
         self.comments.extend(f"c indies {' '.join(map(lambda s: f'{s[0]} {s[1]}', i))}" for i in new_indies)
 
     def _clean_up_comments(self):
@@ -86,7 +87,7 @@ class DCNF(CNF):
             return
         diff = set(ind) - self.ind
         self.ind.update(diff)
-        self.comments.append(f"c ind {' '.join(map(str, diff))} 0")
+        self.comments.append(self.format_ind_comment(diff))
         self.nv = max(self.nv, max(diff))
 
     def add_dep(self, a_s: FrozenSet[int], bs: Set[int]):
@@ -106,6 +107,10 @@ class DCNF(CNF):
     @staticmethod
     def format_dep_comment(a_s: Iterable[int], bs: Iterable[int]) -> str:
         return f"c dep {' '.join(map(str, a_s))} 0 {' '.join(map(str, bs))} 0"
+
+    @staticmethod
+    def format_ind_comment(ind: Iterable[int]) -> str:
+        return f"c ind {' '.join(map(str, ind))} 0"
 
     @staticmethod
     def _is_special_comment(comment: str) -> bool:
@@ -138,6 +143,16 @@ class DCNF(CNF):
         cnf.independents = copy.copy(self.independents)
         return cnf
 
+    def really_shallow_copy(self) -> 'DCNF':
+        cnf = DCNF()
+        cnf.nv = self.nv
+        cnf.clauses = self.clauses
+        cnf.comments = self.comments
+        cnf.ind = self.ind
+        cnf.deps = self.deps
+        cnf.independents = self.independents
+        return cnf
+
     def weighted(self):
         raise NotImplementedError()
 
@@ -167,13 +182,31 @@ class DCNF(CNF):
         cnf.from_string(string)
         return cnf
 
+    def set_deps(self, deps: Deps) -> "DCNF":
+        ret = self.really_shallow_copy()
+        ret.deps = deps
+        ret.comments.clear()
+        ret._update_comments(self.ind, ret.deps, self.independents)
+        return ret
+
+    def set_ind(self, new_ind: Iterable[int]) -> "DCNF":
+        ret = self.really_shallow_copy()
+        ret.comments.clear()
+        ret.ind.clear()
+        ret._update_comments(new_ind, self.deps, self.independents)
+        return ret
+        return ret
+
 
 def blast_xor(*vars: int) -> List[List[int]]:
     """
     Blast the xor of the passed vars.
     Only use it for small number of vars
     """
-    return [list(vars)] + [[-v2 for v2 in vars if v2 != v] + [v] for v in vars]
+    vars = list(vars)
+    if len(vars) <= 1:
+        return [vars]
+    return [vars] + [[-v2 for v2 in vars if v2 != v] + [v] for v in vars]
 
 
 def sum_is_one2(a: int, b: int) -> List[List[int]]:
@@ -221,7 +254,8 @@ def _parse_amc_out(out: str, err: str) -> Optional[float]:
         return None
 
 
-def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float = 0.2, forcesolextension: bool = False)\
+def count_sat(cnfs: Union[List[CNF], CNF], epsilon: float = 0.8, delta: float = 0.2, forcesolextension: bool = False,
+              trim: bool = True)\
         -> Union[List[Optional[float]], Optional[float]]:
     """
     Run ApproxMC with the passed parameters. If multiple CNFs are passed, then these are executed in parallel.
@@ -231,7 +265,7 @@ def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float 
         "delta": delta,
         "forcesolextension": int(forcesolextension)
     }
-    is_single = isinstance(cnfs, DCNF)
+    is_single = isinstance(cnfs, CNF)
     if is_single:
         cnfs = [cnfs]
     try:
@@ -239,7 +273,8 @@ def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float 
             files = []
             for i, cnf in enumerate(cnfs):
                 file = f"{folder}/{i}.cnf"
-                cnf = trim_dcnf(cnf)
+                if trim:
+                    cnf = CNFGraph(cnf).sub_cnf()
                 cnf.to_file(file)
                 #cnf.to_fp(sys.stdout)
                 files.append(file)
@@ -260,7 +295,15 @@ def count_sat(cnfs: Union[List[DCNF], DCNF], epsilon: float = 0.8, delta: float 
         raise
 
 
-class CNFWrapper:
+def parse_ind_from_comments(cnf: CNF) -> Iterable[int]:
+    ind: Set[int] = set()
+    for comment in cnf.comments:
+        if comment.startswith("c ind "):
+            ind.update(set(int(p) for p in comment[6:].split(" ") if p != "0"))
+    return ind
+
+
+class CNFGraph:
 
     def __init__(self, cnf: CNF):
         self.cnf = cnf
@@ -269,12 +312,13 @@ class CNFWrapper:
             for var in clause:
                 self.var_to_clauses[abs(var)].append(i)
 
-    def sub_cnf(self, relevant_vars: List[int], copy_comments: bool = True) -> CNF:
+    def sub_cnf(self, relevant_vars: Iterable[int] = None, copy_comments: bool = True) -> CNF:
+        relevant_vars = relevant_vars or parse_ind_from_comments(self.cnf)
 
         visited_clauses: Set[int] = set()
         visited_vars: Set[int] = set()
 
-        deq = deque()  # a deque of vars
+        deq: Deque[int] = deque()  # a deque of vars
         deq.extend(relevant_vars)
         while len(deq) > 0:
             top = deq.pop()
@@ -291,9 +335,15 @@ class CNFWrapper:
         return cnf
 
 
-def trim_dcnf(cnf: DCNF) -> DCNF:
-    """ Removes all clauses """
-    new_cnf = CNFWrapper(cnf).sub_cnf(cnf.ind, copy_comments=True)
+def trim_dcnf(cnf: DCNF, anchors: Iterable[int] = None) -> DCNF:
+    """ Removes all clauses that are independent from the passed vars or cnf.ind """
+    return trim_dcnf_graph(CNFGraph(cnf), anchors)
+
+
+def trim_dcnf_graph(graph: CNFGraph, anchors: Iterable[int] = None) -> DCNF:
+    cnf = graph.cnf
+    assert isinstance(cnf, DCNF)
+    new_cnf = graph.sub_cnf(anchors or cnf.ind, copy_comments=True)
     new_dcnf = DCNF(from_clauses=new_cnf.clauses, ind=cnf.ind, deps=cnf.deps, independents=cnf.independents)
     new_dcnf.comments = cnf.comments
     assert new_dcnf.independents == cnf.independents and new_dcnf.ind == cnf.ind
