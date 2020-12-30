@@ -238,7 +238,7 @@ def sat(cnf: CNF) -> bool:
                                            shell=True).decode().splitlines()[0] == "s SATISFIABLE"
 
 
-def _parse_amc_out(out: str, err: str) -> Optional[float]:
+def _parse_amc_out(cnf: CNF, out: str, err: str) -> Optional[float]:
     try:
         [mul_base, exponent] = re.split("\\*\\*|\\^", out.split("Number of solutions is:")[1])
         [multiplier, base] = re.split("\\*|x", mul_base)
@@ -251,6 +251,7 @@ def _parse_amc_out(out: str, err: str) -> Optional[float]:
         print("--- Error ---")
         print(out)
         print(err)
+        cnf.to_fp(sys.stdout)
         return None
 
 
@@ -271,10 +272,12 @@ def count_sat(cnfs: Union[List[CNF], CNF], epsilon: float = 0.8, delta: float = 
     try:
         with tempfile.TemporaryDirectory() as folder:
             files = []
+            used_cnfs = []
             for i, cnf in enumerate(cnfs):
                 file = f"{folder}/{i}.cnf"
                 if trim:
                     cnf = CNFGraph(cnf).sub_cnf()
+                used_cnfs.append(cnf)
                 cnf.to_file(file)
                 #cnf.to_fp(sys.stdout)
                 files.append(file)
@@ -283,9 +286,9 @@ def count_sat(cnfs: Union[List[CNF], CNF], epsilon: float = 0.8, delta: float = 
                 shell=True,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for file in files]
             ret = []
-            for process in processes:
+            for i, process in enumerate(processes):
                 out, err = process.communicate()
-                ret.append(_parse_amc_out(out.decode(), err.decode()))
+                ret.append(_parse_amc_out(used_cnfs[i], out.decode(), err.decode()))
             return ret[0] if is_single else ret
     except:
         # fall bock onto the old ApproxMC
@@ -325,14 +328,20 @@ class CNFGraph:
             if top in visited_vars:
                 continue
             visited_vars.add(top)
-            deq.extendleft(set(abs(var) for clause in self.var_to_clauses[top] for var in self.cnf.clauses[clause]))
-            visited_clauses.update(self.var_to_clauses[top])
+            deq.extendleft(set(abs(var) for clause in self.clause_for_var(top) for var in self.cnf.clauses[clause]))
+            visited_clauses.update(self.clause_for_var(top))
 
         cnf = CNF()
         if copy_comments:
             cnf.comments = self.cnf.comments
         cnf.from_clauses([self.cnf.clauses[c] for c in visited_clauses])
+        cnf.nv = max(cnf.nv, max(relevant_vars))
         return cnf
+
+    def clause_for_var(self, var: int) -> List[int]:
+        if var < len(self.var_to_clauses):
+            return self.var_to_clauses[var]
+        return []
 
 
 def trim_dcnf(cnf: DCNF, anchors: Iterable[int] = None) -> DCNF:

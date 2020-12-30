@@ -83,6 +83,7 @@ class State:
     def create_random_xor_clause(self, vars: Iterable[int]) -> List[List[int]]:
         """ Create an xor clause that halves the variability of the passed vars (on average) """
         chosen = [(-1 if random() < 0.5 else 1) * v for v in vars if random() <= 0.5]
+        print("⊻".join(map(str, chosen)))
         return blast_xor(*chosen)
 
     def create_random_xor_clauses(self, vars: Iterable[int], available_variability_bits: int) -> List[List[int]]:

@@ -3,6 +3,7 @@ import statistics
 from pathlib import Path
 import random
 
+import numpy
 import pytest
 from pysat.formula import CNF
 
@@ -73,6 +74,18 @@ def test_basic_program_computation():
     assert state.compute() == 2
 
 
+def test_basic_program2_computation():
+    state = State.from_string("""
+p cnf 0 2
+c ind 2 3 0
+c dep 1 0 2 3
+""")
+    arr = [state.compute() for i in range(20)]
+    print(arr)
+    assert numpy.mean(arr) >= 2
+    assert numpy.median(arr) == 2
+
+
 def test_blast_xor():
     assert blast_xor(3) == [[3]]
 
@@ -111,10 +124,10 @@ class TestFile:
         self.check_case("test1b.cnf", Config(parallelism=2))
 
     def test_test1b(self):
-        l = [State.from_dcnf(load("test1b.cnf")).compute() for i in range(50)]
+        l = [State(load("test1b.cnf")).compute() for i in range(10)]
         for i in range(math.floor(min(l)), math.ceil(max(l)) + 1):
             print(f"{i}: {sum([1 for x in l if x == i])}")
-        print(statistics.quantiles(l, n=100))
+        print(statistics.quantiles(l, n=10))
 
     @pytest.mark.parametrize(
         'file', sorted(f for f in Path("cases").glob("*.cnf")),
@@ -127,9 +140,9 @@ class TestFile:
         'file', sorted(f for f in Path("cases").glob("*.cnf")),
         ids=_id_fn
     )
-    @pytest.mark.skip()
+    #@pytest.mark.skip()
     def test_small_files_multiple_times(self, file: Path):
-        for i in range(100):
+        for i in range(5):
             print(i)
             print(random.getstate())
             self.check_file(file)
