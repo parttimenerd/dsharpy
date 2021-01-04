@@ -4,6 +4,7 @@ Convert the --dimacs output of the modified CBMC
 import itertools
 from collections import deque
 from dataclasses import dataclass, field
+from io import IOBase
 from pathlib import Path
 from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple, Deque
 
@@ -88,7 +89,7 @@ class VarNode:
 
 
 def var_nodes_to_ints(var_nodes: Iterable[VarNode]) -> Iterable[int]:
-    return (v.sat_var for o in var_nodes for v in o.sat_vars)
+    return list(v.sat_var for o in var_nodes for v in o.sat_vars)
 
 
 @dataclass
@@ -205,39 +206,48 @@ class Graph:
         orig_sat.neighbors.append(sat)
         sat.neighbors.append(orig_sat)
 
+    def find_ind_vars(self, ind_var_prefix: str) -> Iterable[int]:
+        variables = [var_node for var_node in self.var_nodes.values() if ("::" + ind_var_prefix + "!") in var_node.name and var_node.name.endswith("#2")]
+        return var_nodes_to_ints(variables)
+
     @classmethod
-    def process(cls, infile: Path, outfile: Path):
+    def process(cls, infile: IOBase, out: IOBase, ind_var_prefix: str = None):
         graph = Graph()
         lines = []
-        with infile.open() as f:
-            for line in f.readlines():
-                line = line.strip()
-                if Graph.is_loop_line(line):
-                    graph._parse_loop_line(line)
-                elif Graph.is_sat_line(line):
-                    graph._parse_sat_line(line)
-                    lines.append(line)
-                elif Graph.is_var_line(line):
-                    graph._parse_var_line(line)
-                    lines.append(line)
-                elif Graph.is_oa_if_line(line):
-                    graph._parse_oa_if_line(line)
-                elif Graph.is_recursion_line(line):
-                    graph._parse_recursion_line(line)
-                elif line.startswith("c ") or line.startswith("p "):
-                    lines.append(line)
+        for line in infile.readlines():
+            line = line.strip()
+            if Graph.is_loop_line(line):
+                graph._parse_loop_line(line)
+            elif Graph.is_sat_line(line):
+                graph._parse_sat_line(line)
+                lines.append(line)
+            elif Graph.is_var_line(line):
+                graph._parse_var_line(line)
+                lines.append(line)
+            elif Graph.is_oa_if_line(line):
+                graph._parse_oa_if_line(line)
+            elif Graph.is_recursion_line(line):
+                graph._parse_recursion_line(line)
+            elif line.startswith("c ") or line.startswith("p "):
+                lines.append(line)
         graph.update_var_deps()
+        if ind_var_prefix:
+            ind = graph.find_ind_vars(ind_var_prefix)
+            lines.append(DCNF.format_ind_comment(ind))
         for loop_iter in graph.loop_iters + graph.recursions:
             lines.append(loop_iter.compute_dependency_strings())
-        with outfile.open("w") as f:
-            f.writelines(line + "\n" for line in lines)
+        out.writelines(line + "\n" for line in lines)
 
 
-@click.command(name="convert", help="Convert output of modified CBMC to D#SAT formulas")
-@click.argument('infile', type=Path)
-@click.argument('outfile', type=Path)
-def cli(infile: Path, outfile: Path):
-    Graph.process(infile, outfile)
+@click.command(name="convert", help="""
+Convert output of modified CBMC to D#SAT formulas.
+
+Variables that start with __out are used for creating "c ind" statements (only their first assignment).
+""")
+@click.argument('infile', type=click.File(mode="r"), required=False, default="-")
+@click.argument('outfile', type=click.File(mode="w"), required=False, default="-")
+def cli(infile: IOBase, outfile: IOBase):
+    Graph.process(infile, outfile, ind_var_prefix="__out")
 
 
 if __name__ == '__main__':

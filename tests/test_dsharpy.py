@@ -1,29 +1,21 @@
 import math
 import statistics
 from pathlib import Path
-import random
+from pytest_check import check
 
 import numpy
 import pytest
 from pysat.formula import CNF
 
-from dsharpy import __version__
 from dsharpy.counter import State, Config
 from dsharpy.formula import sat, DCNF, count_sat, blast_xor
-from dsharpy.util import random_seed
-
-
-def test_version():
-    assert __version__ == '0.1.0'
+from dsharpy.util import random_seed, process_code_with_cbmc, to_bit_ceil
+from tests.util import load
 
 
 def test_sat():
     assert sat(CNF(from_clauses=[[1]]))
     assert not sat(CNF(from_clauses=[[1], [-1]]))
-
-
-def load(name: str) -> DCNF:
-    return DCNF.load(Path("cases") / name)
 
 
 def test_dcnf_loading():
@@ -102,6 +94,99 @@ c dep 2 0 1
     assert val == 3
 
 
+@pytest.mark.skip("I'm unsure what this program should leak")
+def test_recursive_code_unsure():
+    string = process_code_with_cbmc("""
+    #include <assert.h>
+    char non_det_char();
+    char non_det_char2();
+char fib(char num){
+  if (num > 2)
+  {
+    return fib(num) + 1;
+  }
+  return num;
+}
+
+void main()
+{
+  char b = fib(non_det_char2());
+  char __out = b;
+  assert(non_det_char());
+}
+""", preprocess=False)
+    state = State.from_string(string)
+    (a_s, bs), cnf, new_state = state.split()
+    for i in a_s:
+        _cnf = CNF()
+        print(f"variability({i}) = {state.count_sat(cnf, ind={i})}")
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 130  # 2 < num <= 127 # I don't know why it isn't 131
+
+    assert state.count_sat(state.cnf, ind=bs) == 256, "variability of bs"
+
+    ov_possible_variability = state.count_sat(cnf, ind=state.cnf.ind)
+    with check():
+        assert ov_possible_variability == 256, "ov_possible_variability"
+
+    val = State.from_string(string).compute()
+    assert val == 256
+
+
+def test_recursive_code():
+    string = process_code_with_cbmc("""
+    #include <assert.h>
+    char non_det_char();
+    char non_det_char2();
+char fib(char num){
+  if (num > 2)
+  {
+    return fib(num + 1) + 1;
+  }
+  return num;
+}
+
+void main()
+{
+  char b = fib(non_det_char2());
+  char __out = b;
+  assert(non_det_char());
+}
+""", preprocess=False)
+    state = State.from_string(string)
+    (a_s, bs), cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 134  # 2 < num <= 127 # I don't know why it isn't 131
+    val = State.from_string(string).compute()
+    assert val == 256
+
+
+def test_recursive_code_real_fib():
+    string = process_code_with_cbmc("""
+    char non_det_char();
+    char non_det_char2();
+char fib(char num){
+  if (num <= 0){
+    return 0;
+  }
+  if (num > 2)
+  {
+    return fib(num - 1) + fib(num - 2);
+  }
+  return num;
+}
+
+void main()
+{
+  char b = fib(non_det_char2());
+  char __out = b;
+  assert(non_det_char());
+}
+""", preprocess=True, unwind=2)
+    val = State.from_string(string).compute()
+    assert val == 256
+
+
 def _id_fn(file: Path) -> str:
     return str(file)
 
@@ -140,11 +225,9 @@ class TestFile:
         'file', sorted(f for f in Path("cases").glob("*.cnf")),
         ids=_id_fn
     )
-    #@pytest.mark.skip()
+    # @pytest.mark.skip()
     def test_small_files_multiple_times(self, file: Path):
         for i in range(5):
-            print(i)
-            print(random.getstate())
             self.check_file(file)
 
     @pytest.mark.parametrize(

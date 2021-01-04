@@ -1,14 +1,16 @@
 """ Utilities not directly related to formulas or CNFs """
 import copy
 import functools
-import os
+import math
 import random
 import secrets
 import subprocess
-import tempfile
+from io import IOBase
+
+from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any
+from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable
 
 
 def binary_path(program: str) -> Path:
@@ -89,7 +91,10 @@ def pprint(x: Any):
 
 @functools.lru_cache()
 def modified_cbmc_path() -> Path:
-    return next(f for f in (Path(__file__).parent.parent / "util" / "cbmc" / "build").rglob("cbmc") if f.is_file()).absolute()
+    dsharpy_base = Path(__file__).parent.parent
+    if (dsharpy_base.parent / "cbmc").exists():  # were clearly in my current debug setup
+        return dsharpy_base.parent / "cbmc/cmake-build-debug/bin/cbmc"
+    return next(f for f in (dsharpy_base / "util" / "cbmc" / "build").rglob("cbmc") if f.is_file()).absolute()
 
 
 def has_modified_cbmc() -> bool:
@@ -100,17 +105,60 @@ def has_modified_cbmc() -> bool:
         return False
 
 
-def process_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3) -> Path:
+def process_path_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3, preprocess: bool = False) -> Path:
     """ Returns the temporary CNF file """
     if not c_file.exists():
         raise FileNotFoundError(f"File {c_file} not found")
-    out_path = tmp_folder / c_file.name
     cnf_path = tmp_folder / (c_file.name + ".cnf")
-    res = subprocess.run([str(modified_cbmc_path()), str(c_file.absolute()), "--unwind", str(unwind), "--dimacs"],
-                         stdout=out_path.open("w"), bufsize=-1, stderr=subprocess.PIPE)
+    with c_file.open() as f:
+        with cnf_path.open("w") as out:
+            process_with_cbmc(Path(f.name), out, unwind, preprocess)
+    return cnf_path
+
+
+def process_code_with_cbmc(c_code: str, unwind: int = 3, file_ending: str = ".cpp", preprocess: bool = False) -> str:
+    out = StringIO()
+    with NamedTemporaryFile(suffix=".cpp") as f:
+        f.write(c_code.encode())
+        f.flush()
+        process_with_cbmc(Path(f.name), out, unwind, preprocess)
+    return out.getvalue()
+
+
+def preprocess_c_code(c_code: str) -> str:
+    """ Add "int non_det();" and "#include <assert.h>" if not already present """
+    new_lines = ["#include <assert.h>", "int non_det();"]
+    new_lines_to_add = []
+    lines = c_code.split("\n")
+    for new_line in new_lines:
+        if new_line not in lines:
+            new_lines_to_add.append(new_line)
+    return "\n".join(new_lines_to_add + lines)
+
+
+def process_with_cbmc(c_file: Path, out: IOBase, unwind: int = 3, preprocess: bool = False):
+    if preprocess:
+        with NamedTemporaryFile(suffix=c_file.suffix) as f:
+            f.write(preprocess_c_code(c_file.read_text()).encode())
+            f.flush()
+            process_with_cbmc(Path(f.name), out, unwind, preprocess=False)
+        return
+    res = subprocess.run([modified_cbmc_path(), str(c_file), "--unwind", str(unwind), "--dimacs"],
+                         stdout=subprocess.PIPE, bufsize=-1, stderr=subprocess.PIPE)
     err = res.stderr.decode()
-    if "Failed" in err or "Usage" in err:
+    cbmc_out = res.stdout.decode()
+    if "Failed" in err or "Usage" in err or "ERROR" in err or "exception" in err or "0" not in cbmc_out:
         raise BaseException("CBMC: " + err)
     from dsharpy import convert
-    convert.Graph.process(out_path, cnf_path)
-    return cnf_path
+
+    # print(cbmc_out)
+    convert.Graph.process(StringIO(cbmc_out), out, ind_var_prefix="__out")
+
+
+def empty(iterable: Iterable) -> bool:
+    """ Attention: works not for Iterators """
+    return not any(True for i in iterable)
+
+
+def to_bit_ceil(val: float) -> int:
+    return math.ceil(math.log2(val))

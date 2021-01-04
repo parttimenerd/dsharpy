@@ -8,13 +8,14 @@ import subprocess
 import sys
 import tempfile
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import List, Dict, Set, Tuple, Optional, Union, FrozenSet, Iterable, Deque
 
 from pysat.formula import CNF
 
-from dsharpy.util import binary_path
+from dsharpy.util import binary_path, empty
 
 Dep = Tuple[FrozenSet[int], Set[int]]
 Deps = Dict[FrozenSet[int], Set[int]]
@@ -28,7 +29,7 @@ class DCNF(CNF):
                  ind: Set[int] = None, deps: Deps = None, independents: Independents = None):
         super().__init__(from_file, from_fp, from_string, from_clauses or [], from_aiger, comment_lead=['c'])
         self.ind = ind or set()
-        self.deps = deps or {}
+        self.deps: Deps = deps or {}
         self.independents = independents or []
         self._update_from_comments(self.comments)
 
@@ -110,7 +111,9 @@ class DCNF(CNF):
 
     @staticmethod
     def format_ind_comment(ind: Iterable[int]) -> str:
-        return f"c ind {' '.join(map(str, ind))} 0"
+        if not empty(ind):
+            return f"c ind {' '.join(map(str, ind))} 0"
+        return "c ind 0"
 
     @staticmethod
     def _is_special_comment(comment: str) -> bool:
@@ -195,7 +198,6 @@ class DCNF(CNF):
         ret.ind.clear()
         ret._update_comments(new_ind, self.deps, self.independents)
         return ret
-        return ret
 
 
 def blast_xor(*vars: int) -> List[List[int]]:
@@ -241,7 +243,7 @@ def sat(cnf: CNF) -> bool:
 def _parse_amc_out(cnf: CNF, out: str, err: str) -> Optional[float]:
     try:
         [mul_base, exponent] = re.split("\\*\\*|\\^", out.split("Number of solutions is:")[1])
-        [multiplier, base] = re.split("\\*|x", mul_base)
+        [multiplier, base] = re.split("[*x]", mul_base)
         multiplier = float(multiplier)
         base = float(base)
         exponent = float(exponent.split("\n")[0])
@@ -256,7 +258,7 @@ def _parse_amc_out(cnf: CNF, out: str, err: str) -> Optional[float]:
 
 
 def count_sat(cnfs: Union[List[CNF], CNF], epsilon: float = 0.8, delta: float = 0.2, forcesolextension: bool = False,
-              trim: bool = True)\
+              trim: bool = True) \
         -> Union[List[Optional[float]], Optional[float]]:
     """
     Run ApproxMC with the passed parameters. If multiple CNFs are passed, then these are executed in parallel.
@@ -279,7 +281,7 @@ def count_sat(cnfs: Union[List[CNF], CNF], epsilon: float = 0.8, delta: float = 
                     cnf = CNFGraph(cnf).sub_cnf()
                 used_cnfs.append(cnf)
                 cnf.to_file(file)
-                #cnf.to_fp(sys.stdout)
+                # cnf.to_fp(sys.stdout)
                 files.append(file)
             processes = [subprocess.Popen(
                 f"{binary_path('approxmc4')} {file} {' '.join(f'--{k} {v}' for k, v in options.items())}",
@@ -302,7 +304,11 @@ def parse_ind_from_comments(cnf: CNF) -> Iterable[int]:
     ind: Set[int] = set()
     for comment in cnf.comments:
         if comment.startswith("c ind "):
-            ind.update(set(int(p) for p in comment[6:].split(" ") if p != "0"))
+            try:
+                ind.update(set(int(p) for p in comment[6:].split(" ") if p != "0"))
+            except BaseException as ex:
+                print(comment, file=sys.stderr)
+                raise
     return ind
 
 
@@ -317,7 +323,8 @@ class CNFGraph:
 
     def sub_cnf(self, relevant_vars: Iterable[int] = None, copy_comments: bool = True) -> CNF:
         relevant_vars = relevant_vars or parse_ind_from_comments(self.cnf)
-
+        if empty(relevant_vars):
+            return CNF()
         visited_clauses: Set[int] = set()
         visited_vars: Set[int] = set()
 
@@ -357,3 +364,18 @@ def trim_dcnf_graph(graph: CNFGraph, anchors: Iterable[int] = None) -> DCNF:
     new_dcnf.comments = cnf.comments
     assert new_dcnf.independents == cnf.independents and new_dcnf.ind == cnf.ind
     return new_dcnf
+
+
+@dataclass
+class XOR:
+    variables: List[int]
+
+    def dimacs(self) -> List[List[int]]:
+        return blast_xor(*self.variables)
+
+    def __str__(self) -> str:
+        return "⊻".join(map(str, self.variables))
+
+    @staticmethod
+    def multiple_to_dimacs(xors: List["XOR"]) -> List[List[int]]:
+        return [c for xor in xors for c in xor.dimacs()]
