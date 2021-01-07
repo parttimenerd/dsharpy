@@ -187,6 +187,26 @@ void main()
     assert val == 256
 
 
+def test_small_loop():
+    string = process_code_with_cbmc("""
+char non_det_char();
+char non_det_char2();
+
+void main()
+{
+  char num = non_det_char2();
+  char res = 0;
+  while (res < num) {
+    res += 1;
+  }
+  char __out = res;
+  assert(non_det_char());
+}
+""", preprocess=True, unwind=5)
+    val = State.from_string(string).compute()
+    assert val == 256
+
+
 def _id_fn(file: Path) -> str:
     return str(file)
 

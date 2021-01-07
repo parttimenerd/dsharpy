@@ -53,7 +53,12 @@ class DCNF(CNF):
         for c in comments:
             if not self._is_special_comment(c):
                 continue
-            ints = list(int(e) for e in c[6:].split(" "))
+            ints = []
+            try:
+                ints = list(int(e) for e in c[6:].split(" "))
+            except ValueError as ex:
+                print(c)
+                exit(1)
             if ints[-1] == 0:
                 ints = ints[:-1]
             if c.startswith("c ind "):
@@ -107,6 +112,8 @@ class DCNF(CNF):
 
     @staticmethod
     def format_dep_comment(a_s: Iterable[int], bs: Iterable[int]) -> str:
+        if empty(bs):
+            return f"c empty dep from {' '.join(map(str, a_s))}"
         return f"c dep {' '.join(map(str, a_s))} 0 {' '.join(map(str, bs))} 0"
 
     @staticmethod

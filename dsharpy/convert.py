@@ -55,9 +55,10 @@ class VarNode:
         self.var_deps = set()  # type: Set[VarNode]
         self.raw_sat = raw_sat
 
-    def set_var_deps(self):
+    def clear_var_deps(self):
         self.var_deps.clear()
 
+    def add_var_deps(self):
         def visit(node: Node):
             if isinstance(node, VarNode):
                 self.var_deps.add(node)
@@ -66,6 +67,8 @@ class VarNode:
             else:
                 return node.neighbors
         bfs(self.sat_vars, visit)
+        for dep in self.var_deps:
+            dep.var_deps.add(self)
 
     def compute_others(self, vars: List["VarNode"], without_crossing: List["VarNode"]) -> Set["VarNode"]:
         ret: Set["VarNode"] = set()
@@ -101,6 +104,7 @@ class LoopIter:
     def compute_dependencies(self) -> Tuple[Iterable[int], Iterable[int]]:
         """ requires that set_var_deps has been called on all VarNodes before """
         meta_node = VarNode("meta", [v for o in self.outer for v in o.sat_vars], [])
+        meta_node.var_deps.update(set(v for o in self.outer for v in o.var_deps))
         return set(var_nodes_to_ints(self.outer)), var_nodes_to_ints(meta_node.compute_others(self.inner, self.outer))
 
     def compute_dependency_strings(self) -> str:
@@ -128,6 +132,7 @@ class Graph:
         self.sat_nodes: List[Node] = []
         self.loop_iters: List[LoopIter] = []
         self.recursions: List[AbortedRecursion] = []
+        self.relations: List[List[VarNode]] = []
 
 
     def get_sat_node(self, var: int) -> Node:
@@ -143,7 +148,14 @@ class Graph:
 
     def update_var_deps(self):
         for var_node in self.var_nodes.values():
-            var_node.set_var_deps()
+            var_node.clear_var_deps()
+        for var_node in self.var_nodes.values():
+            var_node.add_var_deps()
+        for i, relation in enumerate(self.relations):
+            var = VarNode(f"relation_{i}", [], [])
+            var.var_deps = relation
+            for node in relation:
+                node.var_deps.add(var)
 
     def _parse_variables(self, var_str: str) -> List[VarNode]:
         return [self.get_var_node(var) for var in var_str.split(" ") if len(var) > 0]
@@ -163,6 +175,10 @@ class Graph:
     @staticmethod
     def is_var_line(line: str) -> bool:
         return line.startswith("c ") and (line.split(" ")[-1].split("-")[-1].isdigit() or line.endswith("FALSE") or line.endswith("TRUE"))
+
+    @staticmethod
+    def is_relate_line(line: str) -> bool:
+        return line.startswith("c relate ")
 
     def _parse_loop_line(self, line: str):
         inner, outer = line.split("| outer")
@@ -206,6 +222,9 @@ class Graph:
         orig_sat.neighbors.append(sat)
         sat.neighbors.append(orig_sat)
 
+    def parse_relate_line(self, line: str):
+        self.relations.append([self.get_var_node(part) for part in line.split(" ")[2:]])
+
     def find_ind_vars(self, ind_var_prefix: str) -> Iterable[int]:
         variables = [var_node for var_node in self.var_nodes.values() if ("::" + ind_var_prefix + "!") in var_node.name and var_node.name.endswith("#2")]
         return var_nodes_to_ints(variables)
@@ -228,6 +247,8 @@ class Graph:
                 graph._parse_oa_if_line(line)
             elif Graph.is_recursion_line(line):
                 graph._parse_recursion_line(line)
+            elif Graph.is_relate_line(line):
+                graph.parse_relate_line(line)
             elif line.startswith("c ") or line.startswith("p "):
                 lines.append(line)
         graph.update_var_deps()
