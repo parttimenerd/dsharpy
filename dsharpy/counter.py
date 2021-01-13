@@ -28,7 +28,7 @@ class Config:
     log_iterations: bool = False
     epsilon: float = 0.2
     delta: float = 0.8
-    check_xors_for_variability: bool = True
+    check_xors_for_variability: bool = False
     """ Check that the added xors lead to the variables having the desired variability in the rest of the program """
 
     def __post_init__(self):

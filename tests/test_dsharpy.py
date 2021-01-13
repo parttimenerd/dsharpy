@@ -154,6 +154,7 @@ void main()
 }
 """, preprocess=False)
     state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
     (a_s, bs), cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
     assert available_variability == 134  # 2 < num <= 127 # I don't know why it isn't 131
@@ -182,7 +183,7 @@ void main()
   char __out = b;
   assert(non_det_char());
 }
-""", preprocess=True, unwind=2)
+""", preprocess=True, unwind=3)
     val = State.from_string(string).compute()
     assert val == 256
 
@@ -203,6 +204,48 @@ void main()
   assert(non_det_char());
 }
 """, preprocess=True, unwind=5)
+    val = State.from_string(string).compute()
+    assert val == 256
+
+def test_small_loop2():
+    string = process_code_with_cbmc("""
+char non_det_char();
+char non_det_char2();
+
+void main()
+{
+  char num = non_det_char2();
+  char res = 1;
+  while (res < num) {
+    res *= 4;
+    num *= 2;
+  }
+  char __out = res;
+  assert(non_det_char());
+}
+""", preprocess=True)
+    val = State.from_string(string).compute()
+    assert val == 256
+
+
+def test_small_loop3():
+    string = process_code_with_cbmc("""
+char non_det_char();
+char non_det_char2();
+
+void main()
+{
+  char num = non_det_char2();
+  char res = 1;
+  while (res < num) {
+    res *= 4;
+    num++;
+    num *= res == 2 ? 3 : 1;
+  }
+  char __out = res;
+  assert(non_det_char());
+}
+""", preprocess=True)
     val = State.from_string(string).compute()
     assert val == 256
 

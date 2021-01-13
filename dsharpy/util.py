@@ -10,7 +10,7 @@ from io import IOBase
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable
+from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Iterator, Dict
 
 
 def binary_path(program: str) -> Path:
@@ -117,8 +117,9 @@ def process_path_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3, prep
 
 
 def process_code_with_cbmc(c_code: str, unwind: int = 3, file_ending: str = ".cpp", preprocess: bool = False) -> str:
+    assert unwind >= 3
     out = StringIO()
-    with NamedTemporaryFile(suffix=".cpp") as f:
+    with NamedTemporaryFile(suffix=file_ending) as f:
         f.write(c_code.encode())
         f.flush()
         process_with_cbmc(Path(f.name), out, unwind, preprocess)

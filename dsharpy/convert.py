@@ -1,16 +1,15 @@
 """
 Convert the --dimacs output of the modified CBMC
 """
-import itertools
 from collections import deque
 from dataclasses import dataclass, field
 from io import IOBase
-from pathlib import Path
 from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple, Deque
 
 import click
 
 from dsharpy.formula import DCNF
+from dsharpy.util import VariableSet
 
 
 @dataclass
@@ -66,6 +65,7 @@ class VarNode:
                 self.var_deps.add(node.var)
             else:
                 return node.neighbors
+
         bfs(self.sat_vars, visit)
         for dep in self.var_deps:
             dep.var_deps.add(self)
@@ -95,26 +95,61 @@ def var_nodes_to_ints(var_nodes: Iterable[VarNode]) -> Iterable[int]:
     return list(v.sat_var for o in var_nodes for v in o.sat_vars)
 
 
-@dataclass
-class LoopIter:
+@dataclass(frozen=True)
+class ParentId:
+    loop: bool
+    id: int
 
-    inner: List[VarNode]
-    outer: List[VarNode]
+
+@dataclass
+class Aborted:
+
+    parent: Optional[ParentId]
+    representative: "Aborted"
+
+    def self_representative(self) -> bool:
+        return self.representative == self
+
+
+@dataclass(eq=True)
+class LoopIter(Aborted):
+
+    id: int
+    func_id: str
+    nr: int
+
+    input: List[VarNode]
+
+    last_iter_guard: Optional[VarNode]
+    last_iter_input: List[VarNode]
+    last_iter_output: List[VarNode]
+
+    output: List[VarNode]
+
+    def __post_init__(self):
+        if isinstance(self.last_iter_guard, list):
+            self.last_iter_guard = self.last_iter_guard[0] if self.last_iter_guard else None
+
+    def input_that_outputs_might_depend_on(self) -> Set[VarNode]:
+        meta_node = VarNode("meta", [v for o in self.last_iter_output for v in o.sat_vars], [])
+        meta_node.var_deps.update(set(v for o in self.last_iter_output for v in o.var_deps))
+        return meta_node.compute_others(self.input, self.last_iter_output)
 
     def compute_dependencies(self) -> Tuple[Iterable[int], Iterable[int]]:
         """ requires that set_var_deps has been called on all VarNodes before """
-        meta_node = VarNode("meta", [v for o in self.outer for v in o.sat_vars], [])
-        meta_node.var_deps.update(set(v for o in self.outer for v in o.var_deps))
-        return set(var_nodes_to_ints(self.outer)), var_nodes_to_ints(meta_node.compute_others(self.inner, self.outer))
+        return var_nodes_to_ints(self.input_that_outputs_might_depend_on()), var_nodes_to_ints(self.output)
 
     def compute_dependency_strings(self) -> str:
         """ requires that set_var_deps has been called on all VarNodes before """
         return DCNF.format_dep_comment(*self.compute_dependencies())
 
+    def __hash__(self):
+        return hash([self.id, self.func_id, self.nr])
 
-@dataclass
-class AbortedRecursion:
 
+@dataclass(eq=True)
+class AbortedRecursion(Aborted):
+    id: str
     returns: List[VarNode]
     params: List[VarNode]
 
@@ -124,6 +159,9 @@ class AbortedRecursion:
     def compute_dependency_strings(self) -> str:
         return DCNF.format_dep_comment(*self.compute_dependencies())
 
+    def __hash__(self):
+        return hash(self.id)
+
 
 class Graph:
 
@@ -131,9 +169,10 @@ class Graph:
         self.var_nodes: Dict[str, VarNode] = {}
         self.sat_nodes: List[Node] = []
         self.loop_iters: List[LoopIter] = []
+        self.loop_representative: Dict[(str, int), LoopIter] = {}  # (func_id, loop_nr) → last loop iter
         self.recursions: List[AbortedRecursion] = []
+        self.recursion_representative: Dict[str, AbortedRecursion] = {}
         self.relations: List[List[VarNode]] = []
-
 
     def get_sat_node(self, var: int) -> Node:
         var = abs(var)
@@ -166,30 +205,60 @@ class Graph:
 
     @staticmethod
     def is_recursion_line(line: str) -> bool:
-        return line.startswith("c recursion return ")
+        return line.startswith("c recursion ") and " | parent " in line
 
     @staticmethod
     def is_sat_line(line: str) -> bool:
-        return line.endswith(" 0") and (line.split(" ", maxsplit=1)[0].isdigit() or (line.startswith("-") and line[1].isdigit()))
+        return line.endswith(" 0") and (
+                    line.split(" ", maxsplit=1)[0].isdigit() or (line.startswith("-") and line[1].isdigit()))
 
     @staticmethod
     def is_var_line(line: str) -> bool:
-        return line.startswith("c ") and (line.split(" ")[-1].split("-")[-1].isdigit() or line.endswith("FALSE") or line.endswith("TRUE"))
+        return line.startswith("c ") and (
+                    line.split(" ")[-1].split("-")[-1].isdigit() or line.endswith("FALSE") or line.endswith("TRUE"))
 
     @staticmethod
     def is_relate_line(line: str) -> bool:
         return line.startswith("c relate ")
 
+    def _parse_parent(self, parent_part: str) -> Optional[ParentId]:
+        parent = parent_part.strip()[len("parent "):]
+        if parent == "none":
+            return None
+        else:
+            num = int(parent.split(" ")[1])
+            return ParentId(parent.startswith("loop"), num)
+
+    def _parse_variables(self, vars: str, remove_first: bool) -> List[VarNode]:
+        parts = vars.split(" ")[1 if remove_first else 0:]
+        return [self.get_var_node(var) for var in parts]
+
     def _parse_loop_line(self, line: str):
-        inner, outer = line.split("| outer")
-        inner = inner.split("assigned ", maxsplit=1)[1]
-        self.loop_iters.append(LoopIter(self._parse_variables(inner), self._parse_variables(outer)))
+        """
+        parse lines like "c loop 0 main 0 | parent none | input main::1::num!0@1#2 | lguard goto_symex::\\guard#3 | linput | loutput | output"
+        """
+        id_part, parent_part, input_part, lguard_part, linput_part, loutput_part, output_part = line[len("c loop "):].split(" | ")
+        id_str, func_str, nr_str = id_part.split(" ")
+        iter = LoopIter(self._parse_parent(parent_part), None, int(id_str), func_str, int(nr_str),
+                        *(self._parse_variables(part, remove_first=True) for part in (input_part, lguard_part, linput_part, loutput_part, output_part)))
+        self.loop_iters.append(iter)
+        if (iter.func_id, iter.nr) not in self.loop_representative:
+            self.loop_representative[(iter.func_id, iter.nr)] = iter
+            iter.representative = iter
+        else:
+            iter.representative = self.loop_representative[(iter.func_id, iter.nr)]
 
     def _parse_recursion_line(self, line: str):
-        return_var, params = line.split("| param")
-        return_var = return_var[len("c recursion return "):]
-        rec = AbortedRecursion(self._parse_variables(return_var), self._parse_variables(params))
+        id_part, parent_part, return_part, param_part = line[len("c recursion "):].split(" | ")
+        rec = AbortedRecursion(self._parse_parent(parent_part), id_part, None,
+                               self._parse_variables(return_part, remove_first=True),
+                               self._parse_variables(param_part, remove_first=True))
         self.recursions.append(rec)
+        if rec.id not in self.recursion_representative:
+            self.recursion_representative[rec.id] = rec
+            rec.representative = rec
+        else:
+            rec.representative = self.recursion_representative[rec.id]
         inner_node = Node(None, [])
         for v in rec.returns + rec.params:
             for s in v.sat_vars:
@@ -226,7 +295,8 @@ class Graph:
         self.relations.append([self.get_var_node(part) for part in line.split(" ")[2:]])
 
     def find_ind_vars(self, ind_var_prefix: str) -> Iterable[int]:
-        variables = [var_node for var_node in self.var_nodes.values() if ("::" + ind_var_prefix + "!") in var_node.name and var_node.name.endswith("#2")]
+        variables = [var_node for var_node in self.var_nodes.values() if
+                     ("::" + ind_var_prefix + "!") in var_node.name and var_node.name.endswith("#2")]
         return var_nodes_to_ints(variables)
 
     @classmethod

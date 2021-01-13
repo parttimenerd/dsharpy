@@ -24,7 +24,9 @@ void main()
   assert(b + 1 != 0);
 }
 """, preprocess=True)
-    assert_deps_independent(DCNF.load_string(string).deps)
+    deps = DCNF.load_string(string).deps
+    assert_deps_independent(deps)
+    assert len(deps) == 1
 
 
 def test_small_loop():
@@ -36,12 +38,12 @@ void main()
   char num = non_det_char();
   char res = 1;
   while (res < num) {
-    res += 1;
+    res += 2;
   }
   char __out = res;
   assert(num != 0);
 }
-""", preprocess=True, unwind=2)
+""", preprocess=True, unwind=3)
     dcnf = DCNF.load_string(string)
     assert len(dcnf.deps) == 1
     assert_deps_independent(dcnf.deps)
@@ -62,7 +64,7 @@ void main()
   char bla = num;
   assert(num != 0);
 }
-""", preprocess=True, unwind=2)
+""", preprocess=True, unwind=3)
     dcnf = DCNF.load_string(string)
     assert len(dcnf.deps) == 1
     assert_deps_independent(dcnf.deps)
