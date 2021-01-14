@@ -9,7 +9,6 @@ from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple
 import click
 
 from dsharpy.formula import DCNF
-from dsharpy.util import VariableSet
 
 
 @dataclass

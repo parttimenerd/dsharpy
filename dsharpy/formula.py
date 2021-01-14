@@ -177,7 +177,6 @@ class DCNF(CNF):
         return None
 
     def get_dep_relations(self) -> List[Tuple[int, int]]:
-        print([(a, b) for a_s, bs in self.deps.items() for b in bs for a in a_s])
         return [(a, b) for a_s, bs in self.deps.items() for b in bs for a in a_s]
 
     @staticmethod
