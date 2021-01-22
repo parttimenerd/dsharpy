@@ -42,8 +42,9 @@ Comments can be added by prefixing a line with ``c``.
 The additionial features are realized via comments:
 
 - c ind [variables to count models] 0
-- c dep a_1 … a_n 0 b_1 … b_m 0
+- c dep a_1 … a_n 0 b_1 … b_m 0 [c_1 … c_k 0]
     - tells the counter to assume that there is arbitrary relation between a_1, …, a_n and b_1, …, b_m
+    - the relation (and its arguments) satisfy the constraints c_1, …, c_k
 - c par a_1 b_1 a_2 b_2 …
     - asserts that the relations a_i ~> b_i don't affect each other
     - might help improve the performance of the counter

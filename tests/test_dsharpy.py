@@ -1,6 +1,8 @@
 import math
 import statistics
 from pathlib import Path
+from typing import Tuple, List
+
 from pytest_check import check
 
 import numpy
@@ -8,7 +10,7 @@ import pytest
 from pysat.formula import CNF
 
 from dsharpy.counter import State, Config
-from dsharpy.formula import sat, DCNF, count_sat, blast_xor
+from dsharpy.formula import sat, DCNF, count_sat, blast_xor, Dep, XOR
 from dsharpy.util import random_seed, process_code_with_cbmc, to_bit_ceil
 from tests.util import load
 
@@ -45,7 +47,7 @@ c dep 2 0 3
 def test_split_and_more():
     state = State.from_string(BASIC_PROGRAM)
     dep, cnf, new_state = state.split()
-    assert dep == ({2}, {3})
+    assert dep == Dep({2}, {3})
     assert cnf.clauses == [[1, 2]]
     assert "c ind 2 0" in cnf.comments and len(cnf.comments) == 1
     assert not new_state.can_split()
@@ -57,8 +59,8 @@ def test_split_and_more():
 def test_xor_generation():
     state = State.from_string(BASIC_PROGRAM)
     dep, cnf, new_state = state.split()
-    assert state.create_random_xor_clauses(dep[1], 1) == []  # one variable has one bit of variability
-    assert len(state.create_random_xor_clauses(dep[1], 0)) in [0, 1]
+    assert state.create_random_xor_clauses(dep.ret, 1) == []  # one variable has one bit of variability
+    assert len(state.create_random_xor_clauses(dep.ret, 0)) in [0, 1]
 
 
 def test_basic_program_computation():
@@ -133,6 +135,34 @@ void main()
     assert val == 256
 
 
+def test_recursive_code_reduced_with_guard():
+    string = process_code_with_cbmc("""
+    #include <assert.h>
+bool fib(bool num){
+  if (num)
+  {
+    return fib(num); // the variability of num should only be 1 
+  }
+  return num;
+}
+
+void main()
+{
+  bool __out = fib(non_det_bool()); 
+  // but the overall variability of the program should be 2
+  // as it is unknown what fib(num) does
+  END;
+}
+""", rec=0)
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    ret, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 1
+    val = State.from_string(string, Config(check_xors_for_variability=True)).compute()
+    assert val == 2
+    print(val)
+
 def test_recursive_code():
     string = process_code_with_cbmc("""
     #include <assert.h>
@@ -152,14 +182,13 @@ void main()
   char __out = b;
   assert(non_det_char());
 }
-""", preprocess=False)
-    state = State.from_string(string)
+""", preprocess=False, rec=0)
+    state = State.from_string(string, Config(amc_epsilon=0.1))
     assert len(state.cnf.deps) == 1
-    (a_s, bs), cnf, new_state = state.split()
+    ret, cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
-    assert available_variability == 134  # 2 < num <= 127 # I don't know why it isn't 131
-    val = State.from_string(string).compute()
-    assert val == 256
+    assert available_variability == 125
+    assert state.compute() >= 131
 
 
 def test_recursive_code_real_fib():
@@ -183,8 +212,8 @@ void main()
   char __out = b;
   assert(non_det_char());
 }
-""", preprocess=True, unwind=3)
-    val = State.from_string(string).compute()
+""", preprocess=True, unwind=3, rec=1)
+    val = State.from_string(string, Config(check_xors_for_variability=False)).compute()
     assert val == 256
 
 
@@ -203,9 +232,14 @@ void main()
   char __out = res;
   assert(non_det_char());
 }
-""", preprocess=True, unwind=5)
-    val = State.from_string(string).compute()
-    assert val == 256
+""", preprocess=True, unwind=3)
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    ret, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 128  # cannot count the first round, discard the next two? todo: correct?
+    assert state.compute() == 256
+
 
 def test_small_loop2():
     string = process_code_with_cbmc("""
@@ -224,8 +258,17 @@ void main()
   assert(non_det_char());
 }
 """, preprocess=True)
-    val = State.from_string(string).compute()
-    assert val == 256
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    dep, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 126
+    av_bits = math.ceil(math.log2(available_variability))
+    assert av_bits == 7
+    xors = state.create_random_xor_clauses(dep.ret, av_bits)
+    print("constraints: " + "; ".join(map(str, xors)))
+    print(math.log2(state.count_sat(CNF(from_clauses=XOR.multiple_to_dimacs(xors)), set(abs(x) for xor in xors for x in xor.variables))))
+    #assert state.compute() == 256
 
 
 def test_small_loop3():
@@ -248,6 +291,47 @@ void main()
 """, preprocess=True)
     val = State.from_string(string).compute()
     assert val == 256
+
+
+def test_array_in_loop():
+    string = process_code_with_cbmc("""
+    void main()
+    {
+      int arr[10];
+      int S = non_det();
+      for (int i = 0; i < 10; i++){
+        arr[i] = S & i;
+      }
+      int __out = arr[9];
+      END;
+    }
+    """, preprocess=True, unwind=5)
+    val = math.log2(State.from_string(string).compute())
+    assert val == 32
+
+
+def test_global_variables_with_recursion():
+    string = process_code_with_cbmc("""
+    int global = 0;
+    
+    int func(int H, int m){
+        global |= H & (1 << m);
+        if (m < 32){
+            func(H, m + 1);
+        }
+        return m;
+    }
+    
+    void main()
+    {
+      int H = non_det();
+      func(H, 10);
+      int __out = global;
+      END;
+    }
+    """, preprocess=True, unwind=20)
+    val = math.log2(State.from_string(string).compute())
+    assert val == 32
 
 
 def _id_fn(file: Path) -> str:

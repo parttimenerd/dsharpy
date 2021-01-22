@@ -68,3 +68,23 @@ void main()
     dcnf = DCNF.load_string(string)
     assert len(dcnf.deps) == 1
     assert_deps_independent(dcnf.deps)
+
+
+def test_recursive_code_reduced_with_guard():
+    string = process_code_with_cbmc("""
+bool fib(bool num){
+  return num ? fib(num) : num;
+}
+
+void main()
+{
+  fib(non_det_bool()); 
+  END;
+}
+""", rec=0)
+    dcnf = DCNF.load_string(string)
+    assert len(dcnf.deps) == 1
+    dep = dcnf.deps[0]
+    assert len(dep.param) == 1, "bool parameter"
+    assert len(dep.ret) == 8, "bool return, but this is C, so…"
+    assert_deps_independent(dcnf.deps)

@@ -7,8 +7,9 @@ import re
 import subprocess
 import sys
 import tempfile
+from abc import abstractmethod
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import List, Dict, Set, Tuple, Optional, Union, FrozenSet, Iterable, Deque
@@ -17,8 +18,38 @@ from pysat.formula import CNF
 
 from dsharpy.util import binary_path, empty
 
-Dep = Tuple[FrozenSet[int], Set[int]]
-Deps = Dict[FrozenSet[int], Set[int]]
+
+@dataclass(frozen=True)
+class Dep:
+
+    param: Set[int]
+    ret: Set[int]
+    constraint: Set[int] = field(default_factory=set)
+
+    def empty(self) -> bool:
+        return not len(self.ret)
+
+    def to_comment(self) -> str:
+        if self.empty():
+            return f"c empty dep from {' '.join(map(str, self.param))}"
+        return f"c dep {' 0 '.join(' '.join(map(str, x)) for x in [self.param, self.ret, self.constraint])}"
+
+    @classmethod
+    def from_comment(cls, comment: str) -> "Dep":
+        assert comment.startswith("c dep ")
+        assert comment.count(" 0 ") >= 1
+        param_part, ret_part, *constraint_part = comment[len("c dep "):].split(" 0 ", maxsplit=2)
+
+        def split(part: str) -> Set[int]:
+            return {int(i) for i in part.split(" ") if len(i) and i != "0"}
+
+        return Dep(split(param_part), split(ret_part), split(constraint_part[0]) if len(constraint_part) == 1 else set())
+
+    def __str__(self) -> str:
+        return f"{self.param} ~{self.constraint}~> {self.ret}"
+
+Deps = List[Dep]
+
 Independents = List[Set[Tuple[int, int]]]
 
 
@@ -29,13 +60,13 @@ class DCNF(CNF):
                  ind: Set[int] = None, deps: Deps = None, independents: Independents = None):
         super().__init__(from_file, from_fp, from_string, from_clauses or [], from_aiger, comment_lead=['c'])
         self.ind = ind or set()
-        self.deps: Deps = deps or {}
+        self.deps: Deps = deps or []
         self.independents = independents or []
         self._update_from_comments(self.comments)
 
     def _update_comments(self, new_ind: Iterable[int], new_deps: Deps, new_indies: Independents):
         self.comments.append(self.format_ind_comment(new_ind))
-        self.comments.extend(self.format_dep_comment(a, b) for a, b in new_deps.items())
+        self.comments.extend(dep.to_comment() for dep in new_deps)
         self.comments.extend(f"c indies {' '.join(map(lambda s: f'{s[0]} {s[1]}', i))}" for i in new_indies)
 
     def _clean_up_comments(self):
@@ -47,13 +78,13 @@ class DCNF(CNF):
         self._update_comments(self.ind, self.deps, self.independents)
 
     def _parse_comments(self, comments: List[str]) -> Tuple[Set[int], Deps, Independents]:
-        ind = set()
-        deps: Deps = {}
+        ind: Set[int] = set()
+        deps: Deps = []
         indies = []
         for c in comments:
             if not self._is_special_comment(c):
                 continue
-            ints = []
+            ints: List[int] = []
             try:
                 ints = list(int(e) for e in c[6:].split(" "))
             except ValueError as ex:
@@ -64,11 +95,7 @@ class DCNF(CNF):
             if c.startswith("c ind "):
                 ind.update(ints)
             elif c.startswith("c dep "):
-                ints1, ints2 = ints[:ints.index(0)], ints[ints.index(0) + 1:]
-                a_s = frozenset(ints1)
-                if a_s not in deps:
-                    deps[a_s] = set()
-                deps[a_s].update(ints2)
+                deps.append(Dep.from_comment(c))
             else:
                 tmp = set()
                 for i in range(0, len(ints), 2):
@@ -80,11 +107,11 @@ class DCNF(CNF):
         if not comments:
             return
         combined = ([] if ignore_self else self.comments) + comments
-        ind, dep, indies = self._parse_comments(combined)
+        ind, deps, indies = self._parse_comments(combined)
         self.comments.clear()
         self.add_ind(*ind)
-        for a in dep:
-            self.add_dep(a, dep[a])
+        for dep in deps:
+            self.add_dep(dep)
         self.independents.extend(indies)
         self.comments.extend(set(x for x in combined if not self._is_special_comment(x)))
 
@@ -96,25 +123,10 @@ class DCNF(CNF):
         self.comments.append(self.format_ind_comment(diff))
         self.nv = max(self.nv, max(diff))
 
-    def add_dep(self, a_s: FrozenSet[int], bs: Set[int]):
-        to_add = []
-        if a_s not in self.deps:
-            self.deps[a_s] = bs
-            to_add = bs
-        else:
-            old = self.deps[a_s]
-            for b in bs:
-                if b not in old:
-                    old.add(b)
-                    to_add.append(b)
-        self.comments.append(self.format_dep_comment(a_s, to_add))
-        self.nv = max(self.nv, max(max(a_s), max(to_add)))
-
-    @staticmethod
-    def format_dep_comment(a_s: Iterable[int], bs: Iterable[int]) -> str:
-        if empty(bs):
-            return f"c empty dep from {' '.join(map(str, a_s))}"
-        return f"c dep {' '.join(map(str, a_s))} 0 {' '.join(map(str, bs))} 0"
+    def add_dep(self, dep: Dep):
+        self.deps.append(dep)
+        self.comments.append(dep.to_comment())
+        self.nv = max(self.nv, max(max(dep.param, default=0), max(dep.ret, default=0), max(dep.constraint, default=0)))
 
     @staticmethod
     def format_ind_comment(ind: Iterable[int]) -> str:
@@ -129,7 +141,7 @@ class DCNF(CNF):
     def from_fp(self, file_pointer, comment_lead=['c']):
         super().from_fp(file_pointer, comment_lead)
         self.ind = set()
-        self.deps = {}
+        self.deps = []
         self._update_from_comments(self.comments, ignore_self=True)
 
     def copy(self) -> 'DCNF':

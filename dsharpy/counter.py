@@ -28,7 +28,7 @@ class Config:
     log_iterations: bool = False
     epsilon: float = 0.2
     delta: float = 0.8
-    check_xors_for_variability: bool = False
+    check_xors_for_variability: bool = True
     """ Check that the added xors lead to the variables having the desired variability in the rest of the program """
 
     def __post_init__(self):
@@ -54,7 +54,7 @@ class State:
         From a QIFC point of view, where the deps are generated (hopefully) in the order of their occurrence in the
         program, using the first dep of the list is probably useful
         """
-        return next(iter(self.cnf.deps.items()))
+        return self.cnf.deps[0]
 
     def split_at(self, dep: Dep) -> Tuple[CNF, "State"]:
         """
@@ -62,12 +62,13 @@ class State:
 
         :return cnf that depends on a (for which ind is a),
         """
-        a_s, bs = dep
         header_cnf = CNF()
         header_cnf.from_clauses(self.cnf.clauses)
-        header_cnf.comments = [DCNF.format_ind_comment(a_s)]
+        header_cnf.comments = [DCNF.format_ind_comment(dep.param)]
+        for guard in dep.constraint:
+            header_cnf.append([guard])
         remaining_state = State(
-            trim_dcnf(self.cnf.set_deps({idep[0]: idep[1] for idep in self.cnf.deps.items() if dep != idep})),
+            trim_dcnf(self.cnf.set_deps([idep for idep in self.cnf.deps if dep != idep])),
             self.config)
         return CNFGraph(header_cnf).sub_cnf(), remaining_state
 
@@ -89,21 +90,24 @@ class State:
                          delta=self.config.amc_delta,
                          forcesolextension=self.config.amc_forcesolextension)
 
-    def create_random_xor_clause(self, vars: Iterable[int]) -> XOR:
+    @staticmethod
+    def create_random_xor_clause(vars: Iterable[int]) -> XOR:
         """ Create an xor clause that halves the variability of the passed vars (on average) """
-        chosen = [(-1 if random() < 0.5 else 1) * v for v in vars if random() <= 0.5]
+        chosen = [v for v in vars if random() <= 0.5] # [(-1 if random() < 0.5 else 1) * v for v in vars if random() <= 0.5]
         return XOR(chosen)
 
-    def create_random_xor_clauses(self, vars: Iterable[int], available_variability_bits: int) -> List[XOR]:
+    @staticmethod
+    def create_random_xor_clauses(vars: Iterable[int], available_variability_bits: int) -> List[XOR]:
         """ Create an xor clause that restricts the variable of the passed vars to 2^{passed bits} (on average) """
         ret = []
         restricted_bits = len(list(vars)) - available_variability_bits
         for i in range(restricted_bits):
-            ret.append(self.create_random_xor_clause(vars))
+            ret.append(State.create_random_xor_clause(vars))
         return ret
 
-    def approximate_variability_of_clauses(self, cnf: DCNF, new_clauses: List[List[int]], ind: Iterable[int]) -> float:
-        new_cnf = CNF(from_clauses=cnf.clauses + new_clauses)
+    def approximate_variability_of_clauses(self, cnf: DCNF, new_clauses: List[List[int]], ind: Iterable[int],
+                                           constraints: Set[int] = None) -> float:
+        new_cnf = CNF(from_clauses=cnf.clauses + new_clauses + [[constraint] for constraint in (constraints or [])])
         new_cnf.comments = [DCNF.format_ind_comment(ind)]
         return self._count_sat(new_cnf)
 
@@ -112,12 +116,12 @@ class State:
         if not self.can_split():
             """ no splitting needed, ends the recursion """
             return self._count_sat(self.cnf)
-        (a_s, bs), cnf, new_state = self.split()
+        dep, cnf, new_state = self.split()
         available_variability = self._count_sat(cnf)
         # we over approximate the variability
         available_variability_bits_upper = math.ceil(math.log2(available_variability))
-        print(f"{a_s} ~> {bs} (variability: {math.log2(available_variability):.2f} bits)")
-        constraints: List[XOR] = self.create_random_xor_clauses(bs,
+        print(f"{dep} (variability: {math.log2(available_variability):.2f} bits)")
+        constraints: List[XOR] = self.create_random_xor_clauses(dep.ret,
                                                                 available_variability_bits_upper)  # TODO: more random
         print("constraints: " + "; ".join(map(str, constraints)))
         new_clauses = XOR.multiple_to_dimacs(constraints)
@@ -125,14 +129,13 @@ class State:
         if self.config.check_xors_for_variability:
             # only use the xor clauses if they lead to a satisfying variability
             # Todo: this might never end
-            print(f"# {self.approximate_variability_of_clauses(new_state.cnf, new_clauses, bs)}")
-            while self.approximate_variability_of_clauses(new_state.cnf, new_clauses, bs) != 2 ** min(len(bs),
+            count = 0
+            while count < 3 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret, dep.constraint)) != 2 ** min(len(dep.ret),
                                                                                                       available_variability_bits_upper):
-                print(
-                    f"# {math.log2(self.approximate_variability_of_clauses(new_state.cnf, new_clauses, bs))} vs {available_variability_bits_upper}")
+                print(f"# {math.log2(var)} vs {available_variability_bits_upper}")
                 new_clauses = XOR.multiple_to_dimacs(
-                    self.create_random_xor_clauses(bs, available_variability_bits_upper))
-
+                    self.create_random_xor_clauses(dep.ret, available_variability_bits_upper))
+                count += 1
         new_state.cnf.extend(new_clauses)
         return new_state.compute()
 

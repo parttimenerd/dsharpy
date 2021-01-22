@@ -7,8 +7,9 @@ from io import IOBase
 from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple, Deque
 
 import click
+from pysat.formula import CNF
 
-from dsharpy.formula import DCNF
+from dsharpy.formula import DCNF, Dep
 
 
 @dataclass
@@ -106,12 +107,22 @@ class Aborted:
     parent: Optional[ParentId]
     representative: "Aborted"
 
+    guards: List[Tuple[VarNode, bool]]
+
     def self_representative(self) -> bool:
         return self.representative == self
+
+    def guard_conjunction(self) -> Set[int]:
+        return {sat_var.sat_var * (1 if is_true else -1) for guard, is_true in self.guards for sat_var in guard.sat_vars if sat_var.sat_var}
+
+
+def vars_to_name_mapping(var_nodes: List[VarNode]) -> loop_tree.NameMapping:
+    return loop_tree.NameMapping({var.name: var_nodes_to_ints([var]) for var in var_nodes})
 
 
 @dataclass(eq=True)
 class LoopIter(Aborted):
+    """ Represents the loopt class from CBMC """
 
     id: int
     func_id: str
@@ -134,13 +145,12 @@ class LoopIter(Aborted):
         meta_node.var_deps.update(set(v for o in self.last_iter_output for v in o.var_deps))
         return meta_node.compute_others(self.input, self.last_iter_output)
 
-    def compute_dependencies(self) -> Tuple[Iterable[int], Iterable[int]]:
+    def compute_dependencies(self) -> Dep:
         """ requires that set_var_deps has been called on all VarNodes before """
-        return var_nodes_to_ints(self.input_that_outputs_might_depend_on()), var_nodes_to_ints(self.output)
+        return Dep(set(var_nodes_to_ints(self.input_that_outputs_might_depend_on())), set(var_nodes_to_ints(self.output)), self.guard_conjunction())
 
     def compute_dependency_strings(self) -> str:
-        """ requires that set_var_deps has been called on all VarNodes before """
-        return DCNF.format_dep_comment(*self.compute_dependencies())
+        return self.compute_dependencies().to_comment()
 
     def __hash__(self):
         return hash([self.id, self.func_id, self.nr])
@@ -152,11 +162,11 @@ class AbortedRecursion(Aborted):
     returns: List[VarNode]
     params: List[VarNode]
 
-    def compute_dependencies(self) -> Tuple[Iterable[int], Iterable[int]]:
-        return var_nodes_to_ints(self.params), var_nodes_to_ints(self.returns)
+    def compute_dependencies(self) -> Dep:
+        return Dep(set(var_nodes_to_ints(self.params)), set(var_nodes_to_ints(self.returns)), self.guard_conjunction())
 
     def compute_dependency_strings(self) -> str:
-        return DCNF.format_dep_comment(*self.compute_dependencies())
+        return self.compute_dependencies().to_comment()
 
     def __hash__(self):
         return hash(self.id)
@@ -165,6 +175,7 @@ class AbortedRecursion(Aborted):
 class Graph:
 
     def __init__(self):
+        self.cnf = CNF()
         self.var_nodes: Dict[str, VarNode] = {}
         self.sat_nodes: List[Node] = []
         self.loop_iters: List[LoopIter] = []
@@ -234,11 +245,11 @@ class Graph:
 
     def _parse_loop_line(self, line: str):
         """
-        parse lines like "c loop 0 main 0 | parent none | input main::1::num!0@1#2 | lguard goto_symex::\\guard#3 | linput | loutput | output"
+        parse lines like "c loop 0 main 0 | parent none | input main::1::num!0@1#2 | guards goto_symex::\\guard#3 | lguard goto_symex::\\guard#3 | linput | loutput | output"
         """
-        id_part, parent_part, input_part, lguard_part, linput_part, loutput_part, output_part = line[len("c loop "):].split(" | ")
+        id_part, parent_part, input_part, guards_part, lguard_part, linput_part, loutput_part, output_part = line[len("c loop "):].split(" | ")
         id_str, func_str, nr_str = id_part.split(" ")
-        iter = LoopIter(self._parse_parent(parent_part), None, int(id_str), func_str, int(nr_str),
+        iter = LoopIter(self._parse_parent(parent_part), None, self._parse_guards(guards_part[len("guards "):]), int(id_str), func_str, int(nr_str),
                         *(self._parse_variables(part, remove_first=True) for part in (input_part, lguard_part, linput_part, loutput_part, output_part)))
         self.loop_iters.append(iter)
         if (iter.func_id, iter.nr) not in self.loop_representative:
@@ -247,9 +258,19 @@ class Graph:
         else:
             iter.representative = self.loop_representative[(iter.func_id, iter.nr)]
 
+    def _parse_guards(self, guard_part: str) -> List[Tuple[VarNode, bool]]:
+        ret = []
+        for var in guard_part.split(" "):
+            if not var:
+                continue
+            neg = var[0] == "-"
+            ret.append((self.get_var_node(var[int(neg):]), not neg))
+        return ret
+
     def _parse_recursion_line(self, line: str):
-        id_part, parent_part, return_part, param_part = line[len("c recursion "):].split(" | ")
-        rec = AbortedRecursion(self._parse_parent(parent_part), id_part, None,
+        id_part, parent_part, return_part, param_part, guard_part = line[len("c recursion "):].split(" | ")
+        rec = AbortedRecursion(self._parse_parent(parent_part), None, self._parse_guards(guard_part[len("guards "):]),
+                               id_part,
                                self._parse_variables(return_part, remove_first=True),
                                self._parse_variables(param_part, remove_first=True))
         self.recursions.append(rec)
@@ -265,7 +286,9 @@ class Graph:
                 s.neighbors.append(s)
 
     def _parse_sat_line(self, line: str):
-        vars = [self.get_sat_node(int(i)) for i in line.split(" ")[:-1]]
+        clause = [int(i) for i in line.split(" ")[:-1]]
+        self.cnf.append(clause)
+        vars = [self.get_sat_node(i) for i in clause]
         new_node = Node(None, vars)
         for var in vars:
             var.neighbors.append(new_node)
@@ -320,13 +343,14 @@ class Graph:
                 graph.parse_relate_line(line)
             elif line.startswith("c ") or line.startswith("p "):
                 lines.append(line)
+                graph.cnf.comments.append(line)
         graph.update_var_deps()
         if ind_var_prefix:
             ind = graph.find_ind_vars(ind_var_prefix)
-            lines.append(DCNF.format_ind_comment(ind))
+            graph.cnf.comments.append(DCNF.format_ind_comment(ind))
         for loop_iter in graph.loop_iters + graph.recursions:
-            lines.append(loop_iter.compute_dependency_strings())
-        out.writelines(line + "\n" for line in lines)
+            graph.cnf.comments.append(loop_iter.compute_dependency_strings())
+        graph.cnf.to_fp(out)
 
 
 @click.command(name="convert", help="""

@@ -8,13 +8,16 @@ def load(name: str) -> DCNF:
     return DCNF.load(Path("cases") / name)
 
 
-def check_independence(x: Union[FrozenSet[int], Set[int]], y: Union[FrozenSet[int], Set[int]]) -> bool:
-    return len(x.union(y)) == (len(x) + len(y))
+def check_independence(x: Union[FrozenSet[int], Set[int]], *others: Union[FrozenSet[int], Set[int]]) -> bool:
+    xs = x.copy()
+    for other in others:
+        xs = xs.union(other)
+    return len(xs) == len(x) + sum(len(other) for other in others)
 
 
 def assert_deps_independent(deps: Deps):
     """
-    Asserts that all deps consist of two independent sets
+    Asserts that the dep parameters and returns are independent
     """
-    for x, y in deps.items():
-        assert check_independence(x, y), f"{x} ~> {y}: both sets have to be independent"
+    for dep in deps:
+        assert check_independence(dep.param, dep.ret), f"{dep}: param and ret have to be independent"
