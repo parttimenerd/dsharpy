@@ -3,6 +3,7 @@ This module is based on the pysat.formula module to provide a simple interface t
 D#SAT specific comments.
 """
 import copy
+import math
 import re
 import subprocess
 import sys
@@ -12,11 +13,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Dict, Set, Tuple, Optional, Union, FrozenSet, Iterable, Deque
+from typing import List, Set, Tuple, Optional, Union, Iterable, Deque
 
 from pysat.formula import CNF
 
-from dsharpy.util import binary_path, empty
+from dsharpy.util import binary_path, empty, random_bool, random_split
 
 
 @dataclass(frozen=True)
@@ -394,6 +395,70 @@ class XOR:
     def __str__(self) -> str:
         return "⊻".join(map(str, self.variables))
 
-    @staticmethod
-    def multiple_to_dimacs(xors: List["XOR"]) -> List[List[int]]:
-        return [c for xor in xors for c in xor.dimacs()]
+    def randomize(self) -> "XOR":
+        """ Randomize the signs of the variables """
+        return XOR([(-1 if random_bool() else 1) * v for v in self.variables])
+
+@dataclass
+class XORs:
+
+    xors: List[XOR]
+
+    def to_dimacs(self):
+        return [c for xor in self.xors for c in xor.dimacs()]
+
+    def variables(self) -> Set[int]:
+        return set(abs(x) for xor in self.xors for x in xor.variables)
+
+    def count_sat(self, **kwargs):
+        dcnf = DCNF(from_clauses=self.to_dimacs())
+        return count_sat(dcnf.set_ind(dcnf.set_ind(self.variables())), **kwargs)
+
+    def __str__(self):
+        return " ∧ ".join(map(str, self.xors))
+
+
+class XORGenerator:
+    """ Generate xors for a specific"""
+
+    @abstractmethod
+    def generate(self, variables: List[int], variability: float) -> XORs:
+        """
+        Generate a list of xors which constraint the variables, so that the resulting variability
+        of the variables + constraints is in bits as given
+        """
+        pass
+
+
+class OverapproxXORGenerator(XORGenerator):
+
+    def generate(self, variables: List[int], variability: float) -> XORs:
+        return self._generate(variables, math.ceil(variability))
+
+    @abstractmethod
+    def _generate(self, variables: List[int], variability: int) -> XORs:
+        pass
+
+
+class FullyRandomXORGenerator(OverapproxXORGenerator):
+    """
+    Idea:
+     Generate $restricted_bits$ number of XOR clauses that contain each variable with probability 0.5
+    """
+
+    def _create_random_xor(self, variables: List[int]) -> XOR:
+        return XOR([v for v in variables if random_bool()]).randomize()
+
+    def _generate(self, variables: List[int], variability: int) -> XORs:
+        restricted_bits = len(variables) - variability
+        return XORs([self._create_random_xor(variables) for i in range(restricted_bits)])
+
+
+class RangeSplitXORGenerator(OverapproxXORGenerator):
+    """
+    Idea:
+     Split variable set into $restricted_bits$ disjoint subsets, each of them will become an XOR
+    """
+
+    def _generate(self, variables: List[int], variability: int) -> XORs:
+        return XORs([XOR(part).randomize() for part in random_split(variables, len(variables) - variability, min_size=1)])

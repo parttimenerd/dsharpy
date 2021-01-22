@@ -65,6 +65,10 @@ def random_int(min: int, max: int):
     return randomness.rand_int(max - min) + min
 
 
+def random_bool() -> bool:
+    return random_int(0, 1) == 0
+
+
 def random_seed(seed: int):
     """ Set the random seed, useful for testing """
     random.seed(seed)
@@ -78,10 +82,31 @@ def random_exact_split(l: List[T]) -> Tuple[List[T], List[T]]:
     return shuffled[:mid], shuffled[mid:]
 
 
+def random_split(l: List[T], n: int, min_size: int = 0) -> List[List[T]]:
+    """ Split n parts with at least min_size elements each """
+    assert min_size * n <= len(l)
+    if n == 0:
+        return []
+    shuffled = random_shuffle(l)
+    ret = [[] for i in range(n)]
+    if min_size > 0:
+        for i, part_list in enumerate(ret):
+            part_list.extend(shuffled[i * min_size:(i + 1) * min_size])
+    for e in shuffled[min_size * n:]:
+        ret[random_int(0, len(ret) - 1)].append(e)
+    return ret
+
+
 def random_choice(l: Union[Set[T], Sequence[T]]) -> T:
     if isinstance(l, set):
         return random_choice(tuple(l))
     return l[randomness.rand_int(len(l) - 1)]
+
+
+def random_shuffle(l: List[T]) -> List[T]:
+    shuffled = copy.copy(l)
+    randomness.shuffle(shuffled)
+    return shuffled
 
 
 def pprint(x: Any):
@@ -154,7 +179,7 @@ def process_with_cbmc(c_file: Path, out: IOBase, unwind: int = 3, rec: int = Non
                          stdout=subprocess.PIPE, bufsize=-1, stderr=subprocess.PIPE, env=my_env)
     err = res.stderr.decode()
     cbmc_out = res.stdout.decode()
-    if "Failed" in err or "Usage" in err or "ERROR" in err or "exception" in err or "0" not in cbmc_out:
+    if "Failed" in err or "Usage" in err or "ERROR" in err or "exception" in err or "0" not in cbmc_out or " failed" in err:
         raise BaseException("CBMC: " + err)
     from dsharpy import convert
 

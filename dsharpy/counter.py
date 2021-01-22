@@ -14,12 +14,12 @@ from prettyprinter import register_pretty, pretty_call
 from pysat.formula import CNF
 
 from dsharpy.formula import Independents, count_sat, DCNF, sum_is_one2, sum_is_one4, sat, CNFGraph, Dep, \
-    trim_dcnf_graph, trim_dcnf, blast_xor, XOR
+    trim_dcnf_graph, trim_dcnf, blast_xor, XOR, RangeSplitXORGenerator, XORGenerator, XORs, FullyRandomXORGenerator
 from dsharpy.util import random_exact_split, random_choice, pprint, random_seed, process_with_cbmc, has_modified_cbmc, \
     process_path_with_cbmc
 
 
-@dataclass
+@dataclass(frozen=True)
 class Config:
     parallelism: int = 2
     amc_epsilon: float = 0.8
@@ -30,6 +30,7 @@ class Config:
     delta: float = 0.8
     check_xors_for_variability: bool = True
     """ Check that the added xors lead to the variables having the desired variability in the rest of the program """
+    xor_generator: XORGenerator = field(default_factory=FullyRandomXORGenerator)
 
     def __post_init__(self):
         rel = math.log2(self.parallelism)
@@ -90,20 +91,9 @@ class State:
                          delta=self.config.amc_delta,
                          forcesolextension=self.config.amc_forcesolextension)
 
-    @staticmethod
-    def create_random_xor_clause(vars: Iterable[int]) -> XOR:
-        """ Create an xor clause that halves the variability of the passed vars (on average) """
-        chosen = [v for v in vars if random() <= 0.5] # [(-1 if random() < 0.5 else 1) * v for v in vars if random() <= 0.5]
-        return XOR(chosen)
-
-    @staticmethod
-    def create_random_xor_clauses(vars: Iterable[int], available_variability_bits: int) -> List[XOR]:
+    def create_random_xor_clauses(self, variables: Iterable[int], available_variability: float) -> XORs:
         """ Create an xor clause that restricts the variable of the passed vars to 2^{passed bits} (on average) """
-        ret = []
-        restricted_bits = len(list(vars)) - available_variability_bits
-        for i in range(restricted_bits):
-            ret.append(State.create_random_xor_clause(vars))
-        return ret
+        return self.config.xor_generator.generate(list(variables), available_variability)
 
     def approximate_variability_of_clauses(self, cnf: DCNF, new_clauses: List[List[int]], ind: Iterable[int],
                                            constraints: Set[int] = None) -> float:
@@ -117,24 +107,22 @@ class State:
             """ no splitting needed, ends the recursion """
             return self._count_sat(self.cnf)
         dep, cnf, new_state = self.split()
-        available_variability = self._count_sat(cnf)
+        available_variability: float = self._count_sat(cnf)
         # we over approximate the variability
-        available_variability_bits_upper = math.ceil(math.log2(available_variability))
-        print(f"{dep} (variability: {math.log2(available_variability):.2f} bits)")
-        constraints: List[XOR] = self.create_random_xor_clauses(dep.ret,
-                                                                available_variability_bits_upper)  # TODO: more random
-        print("constraints: " + "; ".join(map(str, constraints)))
-        new_clauses = XOR.multiple_to_dimacs(constraints)
+        available_variability_bits = math.log2(available_variability)
+        print(f"{dep} (variability: {available_variability_bits:.2f} bits)")
+        constraints: XORs = self.create_random_xor_clauses(dep.ret, available_variability_bits)
+        print(f"constraints: {constraints}")
+        new_clauses = constraints.to_dimacs()
 
         if self.config.check_xors_for_variability:
             # only use the xor clauses if they lead to a satisfying variability
             # Todo: this might never end
             count = 0
-            while count < 3 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret, dep.constraint)) != 2 ** min(len(dep.ret),
-                                                                                                      available_variability_bits_upper):
-                print(f"# {math.log2(var)} vs {available_variability_bits_upper}")
-                new_clauses = XOR.multiple_to_dimacs(
-                    self.create_random_xor_clauses(dep.ret, available_variability_bits_upper))
+            while count < 10 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret, dep.constraint)) != 2 ** min(len(dep.ret),
+                                                                                                      math.ceil(available_variability_bits)):
+                print(f"# {math.log2(var) if var != 0 else 'unsat'} vs {available_variability_bits}")
+                new_clauses = self.create_random_xor_clauses(dep.ret, available_variability_bits).to_dimacs()
                 count += 1
         new_state.cnf.extend(new_clauses)
         return new_state.compute()

@@ -10,7 +10,7 @@ import pytest
 from pysat.formula import CNF
 
 from dsharpy.counter import State, Config
-from dsharpy.formula import sat, DCNF, count_sat, blast_xor, Dep, XOR
+from dsharpy.formula import sat, DCNF, count_sat, blast_xor, Dep, XOR, RangeSplitXORGenerator
 from dsharpy.util import random_seed, process_code_with_cbmc, to_bit_ceil
 from tests.util import load
 
@@ -54,13 +54,6 @@ def test_split_and_more():
     assert "c ind 4 0" in new_state.cnf.comments
     assert new_state.cnf.clauses == [[3, 4]]
     assert state._count_sat(cnf) == 2
-
-
-def test_xor_generation():
-    state = State.from_string(BASIC_PROGRAM)
-    dep, cnf, new_state = state.split()
-    assert state.create_random_xor_clauses(dep.ret, 1) == []  # one variable has one bit of variability
-    assert len(state.create_random_xor_clauses(dep.ret, 0)) in [0, 1]
 
 
 def test_basic_program_computation():
@@ -154,12 +147,12 @@ void main()
   END;
 }
 """, rec=0)
-    state = State.from_string(string)
+    state = State.from_string(string, Config(xor_generator=RangeSplitXORGenerator()))
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
     assert available_variability == 1
-    val = State.from_string(string, Config(check_xors_for_variability=True)).compute()
+    val = state.compute()
     assert val == 2
     print(val)
 
@@ -266,8 +259,8 @@ void main()
     av_bits = math.ceil(math.log2(available_variability))
     assert av_bits == 7
     xors = state.create_random_xor_clauses(dep.ret, av_bits)
-    print("constraints: " + "; ".join(map(str, xors)))
-    print(math.log2(state.count_sat(CNF(from_clauses=XOR.multiple_to_dimacs(xors)), set(abs(x) for xor in xors for x in xor.variables))))
+    print(f"constraints: {xors}")
+    print(math.log2(state.count_sat(CNF(from_clauses=xors.to_dimacs()), xors.variables())))
     #assert state.compute() == 256
 
 
@@ -329,9 +322,10 @@ def test_global_variables_with_recursion():
       int __out = global;
       END;
     }
-    """, preprocess=True, unwind=20)
-    val = math.log2(State.from_string(string).compute())
-    assert val == 32
+    """, preprocess=True, rec=0)
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    assert math.log2(state.compute()) == 32
 
 
 def _id_fn(file: Path) -> str:
