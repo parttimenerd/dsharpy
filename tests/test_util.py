@@ -1,7 +1,7 @@
 import pytest
 
 from dsharpy.formula import DCNF
-from dsharpy.util import empty, process_code_with_cbmc
+from dsharpy.util import empty, process_code_with_cbmc, bit_count
 
 
 def test_empty():
@@ -29,3 +29,8 @@ void main()
 }
 """, preprocess=True))
     assert len(dcnf.ind) == 32
+
+
+def test_bit_count():
+    assert bit_count(2) == 1
+    assert bit_count(10) == 2

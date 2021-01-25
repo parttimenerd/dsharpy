@@ -13,11 +13,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Set, Tuple, Optional, Union, Iterable, Deque
+from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, Sized
 
 from pysat.formula import CNF
 
-from dsharpy.util import binary_path, empty, random_bool, random_split
+from dsharpy.util import binary_path, empty, random_bool, random_split, bit_count, ints_with_even_bit_count
 
 
 @dataclass(frozen=True)
@@ -216,34 +216,60 @@ class DCNF(CNF):
         ret.comments.clear()
         ret.ind.clear()
         ret._update_comments(new_ind, self.deps, self.independents)
+        ret.ind = set(new_ind)
         return ret
 
 
-def blast_xor(*vars: int) -> List[List[int]]:
+def blast_xor(variables: List[int], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:
     """
     Blast the xor of the passed vars.
-    Only use it for small number of vars
-    """
-    vars = list(vars)
-    if len(vars) <= 1:
-        return [vars]
-    return [vars] + [[-v2 for v2 in vars if v2 != v] + [v] for v in vars]
+    Only use it for small number of vars.
 
+    "We employ the standard technique of blasting XORs intoCNF.
+    Observe that a XOR over k variables can be equivalently represented as CNF
+    over k variables and O(2^k) clauses. Since we deal with long XORs,
+    typically of size|S|/2, we first cut a long XORs into smaller XORs
+    by introducing auxiliary variables. The size of small XORs is known as cutting
+    number.  We experimented with different cutting numbers and found
+    that cutting number = 4 is optimal for our usecase."
+    (from "BIRD: Engineering an Efficient CNF-XOR SATSolver and
+    Its Applications to Approximate Model Counting" by Soos et al,
+    the underlying paper for cryptominisat that is used in ApproxMC)
 
-def sum_is_one2(a: int, b: int) -> List[List[int]]:
+    :param variables: variables with signs to construct an xor from
+    :param new_start: starting id for new variables
+    :param cutting_number: maximum number of variables in the xors that are actually blasted without being split
     """
-    a and b are boolean variables
-
-    a + b = 1 ←→ a xor b ←→ (a → -b) and (-a → b)
-    """
-    return [[-a, -b], [a, b]]
-
-
-def sum_is_one4(a: int, b: int, c: int, d: int, new_var1: int, new_var2: int) -> List[List[int]]:
-    """
-    :param new_var1: new variable to use
-    """
-    return blast_xor(new_var1, a, b) + blast_xor(new_var2, c, d) + sum_is_one2(a, b) + [[-a, -b], [-c, -d]]
+    assert cutting_number is None or cutting_number > 2
+    if len(variables) <= 1:
+        return [variables]
+    if cutting_number is None or len(variables) <= cutting_number:
+        clauses = []
+        for i in ints_with_even_bit_count(2 ** len(variables)):
+            clause = []
+            for variable in variables:
+                clause.append((1 if i & 0b1 else -1) * variable)
+                i //= 2
+            clauses.append(clause)
+        return clauses
+    assert new_start > 0
+    # we split the xor into smallers xors
+    clauses = []
+    last_new_var = new_start - 1
+    start = 0
+    while start < len(variables):
+        is_start = start == 0
+        is_end = len(variables) - start <= cutting_number - 1
+        increment = cutting_number - int(not is_end) - int(not is_start)
+        new_xor = variables[start: start + increment]
+        start += increment
+        if not is_start:
+            new_xor.append(last_new_var)
+        if not is_end:
+            new_xor.append(-(last_new_var + 1))
+        last_new_var += 1
+        clauses.extend(blast_xor(new_xor, new_start=0, cutting_number=None))
+    return clauses
 
 
 def sat(cnf: CNF) -> bool:
@@ -385,34 +411,48 @@ def trim_dcnf_graph(graph: CNFGraph, anchors: Iterable[int] = None) -> DCNF:
     return new_dcnf
 
 
-@dataclass
+@dataclass(frozen=True)
 class XOR:
-    variables: List[int]
 
-    def dimacs(self) -> List[List[int]]:
-        return blast_xor(*self.variables)
+    atoms: List[int]
+
+    def to_dimacs(self, new_start: int) -> List[List[int]]:
+        return blast_xor(self.atoms, new_start)
 
     def __str__(self) -> str:
-        return "⊻".join(map(str, self.variables))
+        return "⊻".join(map(str, self.atoms))
 
     def randomize(self) -> "XOR":
         """ Randomize the signs of the variables """
-        return XOR([(-1 if random_bool() else 1) * v for v in self.variables])
+        return XOR([(-1 if random_bool() else 1) * v for v in self.atoms])
 
-@dataclass
+    def variables(self) -> Set[int]:
+        return set(abs(x) for x in self.atoms)
+
+    def count_sat(self, **kwargs):
+        return count_sat(DCNF(from_clauses=self.to_dimacs(max(self.variables()) + 1)).set_ind(self.variables()), **kwargs)
+
+
+@dataclass(frozen=True)
 class XORs:
 
     xors: List[XOR]
 
-    def to_dimacs(self):
-        return [c for xor in self.xors for c in xor.dimacs()]
+    def to_dimacs(self, new_start: int):
+        return [c for xor in self.xors for c in xor.to_dimacs(new_start)]
 
     def variables(self) -> Set[int]:
-        return set(abs(x) for xor in self.xors for x in xor.variables)
+        return set(x for xor in self.xors for x in xor.variables())
 
-    def count_sat(self, **kwargs):
-        dcnf = DCNF(from_clauses=self.to_dimacs())
-        return count_sat(dcnf.set_ind(dcnf.set_ind(self.variables())), **kwargs)
+    def count_sat(self, **kwargs) -> int:
+        variables = self.variables()
+        if self.empty():
+            return 1
+        dcnf = DCNF(from_clauses=self.to_dimacs(new_start=max(variables) + 1))
+        return count_sat(dcnf.set_ind(variables), **kwargs)
+
+    def empty(self) -> bool:
+        return all(not len(xor.atoms) for xor in self.xors)
 
     def __str__(self):
         return " ∧ ".join(map(str, self.xors))
@@ -425,7 +465,7 @@ class XORGenerator:
     def generate(self, variables: List[int], variability: float) -> XORs:
         """
         Generate a list of xors which constraint the variables, so that the resulting variability
-        of the variables + constraints is in bits as given
+        of the variables + constraints is in bits as given, but at maximum len(variables)
         """
         pass
 
@@ -433,7 +473,7 @@ class XORGenerator:
 class OverapproxXORGenerator(XORGenerator):
 
     def generate(self, variables: List[int], variability: float) -> XORs:
-        return self._generate(variables, math.ceil(variability))
+        return self._generate(variables, min(math.ceil(variability), len(variables)))
 
     @abstractmethod
     def _generate(self, variables: List[int], variability: int) -> XORs:

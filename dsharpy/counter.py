@@ -10,13 +10,11 @@ from tempfile import TemporaryDirectory
 from typing import Tuple, Set, List, Dict, Optional, Union, cast, Iterable
 
 import click as click
-from prettyprinter import register_pretty, pretty_call
 from pysat.formula import CNF
 
-from dsharpy.formula import Independents, count_sat, DCNF, sum_is_one2, sum_is_one4, sat, CNFGraph, Dep, \
-    trim_dcnf_graph, trim_dcnf, blast_xor, XOR, RangeSplitXORGenerator, XORGenerator, XORs, FullyRandomXORGenerator
-from dsharpy.util import random_exact_split, random_choice, pprint, random_seed, process_with_cbmc, has_modified_cbmc, \
-    process_path_with_cbmc
+from dsharpy.formula import count_sat, DCNF, sat, CNFGraph, Dep, trim_dcnf, \
+    RangeSplitXORGenerator, XORGenerator, XORs, FullyRandomXORGenerator
+from dsharpy.util import random_seed, has_modified_cbmc, process_path_with_cbmc
 
 
 @dataclass(frozen=True)
@@ -30,7 +28,7 @@ class Config:
     delta: float = 0.8
     check_xors_for_variability: bool = True
     """ Check that the added xors lead to the variables having the desired variability in the rest of the program """
-    xor_generator: XORGenerator = field(default_factory=FullyRandomXORGenerator)
+    xor_generator: XORGenerator = field(default_factory=RangeSplitXORGenerator)
 
     def __post_init__(self):
         rel = math.log2(self.parallelism)
@@ -108,12 +106,17 @@ class State:
             return self._count_sat(self.cnf)
         dep, cnf, new_state = self.split()
         available_variability: float = self._count_sat(cnf)
+
+        if available_variability == 0:  # this is most likely due to the constraints being unsatisfiable
+            assert not sat(cnf)
+            return new_state.compute()
+
         # we over approximate the variability
         available_variability_bits = math.log2(available_variability)
         print(f"{dep} (variability: {available_variability_bits:.2f} bits)")
         constraints: XORs = self.create_random_xor_clauses(dep.ret, available_variability_bits)
         print(f"constraints: {constraints}")
-        new_clauses = constraints.to_dimacs()
+        new_clauses = constraints.to_dimacs(self.cnf.nv + 1)
 
         if self.config.check_xors_for_variability:
             # only use the xor clauses if they lead to a satisfying variability
@@ -122,7 +125,7 @@ class State:
             while count < 10 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret, dep.constraint)) != 2 ** min(len(dep.ret),
                                                                                                       math.ceil(available_variability_bits)):
                 print(f"# {math.log2(var) if var != 0 else 'unsat'} vs {available_variability_bits}")
-                new_clauses = self.create_random_xor_clauses(dep.ret, available_variability_bits).to_dimacs()
+                new_clauses = self.create_random_xor_clauses(dep.ret, available_variability_bits).to_dimacs(self.cnf.nv + 1)
                 count += 1
         new_state.cnf.extend(new_clauses)
         return new_state.compute()

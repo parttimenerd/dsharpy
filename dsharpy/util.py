@@ -196,3 +196,21 @@ def empty(iterable: Iterable) -> bool:
 
 def to_bit_ceil(val: float) -> int:
     return math.ceil(math.log2(val))
+
+
+def bit_count(i: int) -> int:
+    """
+    Count the set bits in i, for non-negative integers only
+    """
+    assert i >= 0
+    count = 0
+    while i > 0:
+        count += i & 0b1
+        i //= 2
+    return count
+
+
+@functools.lru_cache()
+def ints_with_even_bit_count(max_int: int) -> List[int]:
+    """ Ints with even bit count, up to max_int (inclusive) """
+    return [i for i in range(max_int + 1) if bit_count(i) % 2 == 0]
