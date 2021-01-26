@@ -25,6 +25,7 @@ class Dep:
     param: Set[int]
     ret: Set[int]
     constraint: Set[int] = field(default_factory=set)
+    max_variability: Optional[float] = None
 
     def empty(self) -> bool:
         return not len(self.ret)
@@ -32,22 +33,24 @@ class Dep:
     def to_comment(self) -> str:
         if self.empty():
             return f"c empty dep from {' '.join(map(str, self.param))}"
-        return f"c dep {' 0 '.join(' '.join(map(str, x)) for x in [self.param, self.ret, self.constraint])}"
+        parts = [self.param, self.ret, self.constraint, [self.max_variability or 'inf']]
+        return f"c dep {' 0 '.join(' '.join(map(str, x)) for x in parts)}"
 
     @classmethod
     def from_comment(cls, comment: str) -> "Dep":
         assert comment.startswith("c dep ")
         assert comment.count(" 0 ") >= 1
-        param_part, ret_part, *constraint_part = comment[len("c dep "):].split(" 0 ", maxsplit=2)
+        atoms = comment[len("c dep "):].split(" ")
+        param_part, ret_part, constraint_part, max_dep_part = ("  ".join(atoms) + " 0  0  0  ").split(" 0 ", maxsplit=3)
 
         def split(part: str) -> Set[int]:
             return {int(i) for i in part.split(" ") if len(i) and i != "0"}
 
-        return Dep(split(param_part), split(ret_part),
-                   split(constraint_part[0]) if len(constraint_part) == 1 else set())
+        return Dep(split(param_part), split(ret_part), split(constraint_part),
+                   float(max_dep_part.strip().split(" ")[0]) if max_dep_part.startswith(" ") else None)
 
     def __str__(self) -> str:
-        return f"{self.param} ~{self.constraint}~> {self.ret}"
+        return f"{self.param} ~{self.constraint}~{self.max_variability or 'inf'}~> {self.ret}"
 
 
 Deps = List[Dep]
@@ -86,6 +89,9 @@ class DCNF(CNF):
         for c in comments:
             if not self._is_special_comment(c):
                 continue
+            if c.startswith("c dep "):
+                deps.append(Dep.from_comment(c))
+                continue
             ints: List[int] = []
             try:
                 ints = list(int(e) for e in c[6:].split(" "))
@@ -96,8 +102,6 @@ class DCNF(CNF):
                 ints = ints[:-1]
             if c.startswith("c ind "):
                 ind.update(ints)
-            elif c.startswith("c dep "):
-                deps.append(Dep.from_comment(c))
             else:
                 tmp = set()
                 for i in range(0, len(ints), 2):

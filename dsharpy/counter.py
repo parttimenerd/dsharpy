@@ -110,7 +110,7 @@ class State:
             return new_state.compute()
 
         # we over approximate the variability
-        available_variability_bits = math.log2(available_variability)
+        available_variability_bits = math.log2(min(available_variability, dep.max_variability or float("inf")))
         print(f"{dep} (variability: {available_variability_bits:.2f} bits)")
         constraints: XORs = self.create_random_xor_clauses(dep.ret, available_variability_bits)
         print(f"constraints: {constraints}")

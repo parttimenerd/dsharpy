@@ -84,6 +84,18 @@ c dep 2 0 1
     assert val == 3
 
 
+def test_basic_compute_with_max_variability():
+    string = """
+p cnf 0 2
+1 2 0
+c ind 1 2 4 0
+c dep 2 3 0 1 4 0 0 1 0
+"""
+    random_seed(10)
+    val = State.from_string(string).compute()
+    assert val == 2
+
+
 @pytest.mark.skip("I'm unsure what this program should leak")
 def test_recursive_code_unsure():
     string = process_code_with_cbmc("""
