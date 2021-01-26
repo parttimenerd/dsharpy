@@ -1,10 +1,8 @@
 import math
 
 import pytest
-from pysat.formula import CNF
-from pytest_check import check
 
-from dsharpy.formula import RangeSplitXORGenerator, FullyRandomXORGenerator, XOR, sat, XORs, blast_xor
+from dsharpy.formula import RangeSplitXORGenerator, FullyRandomXORGenerator, XOR, XORs, blast_xor
 
 
 def test_xor_reduce_variability_by_one_ranged():
@@ -57,4 +55,3 @@ def test_blast_xor_count(count: int):
 def test_range_split_with_more_variability_than_variables():
     xor = FullyRandomXORGenerator().generate([1, 2], 5)
     assert xor == XORs([])
-

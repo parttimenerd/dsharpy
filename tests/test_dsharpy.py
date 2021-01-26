@@ -1,13 +1,12 @@
 import math
 import statistics
 from pathlib import Path
-from typing import Tuple, List
-
-from pytest_check import check
+from typing import Tuple
 
 import numpy
 import pytest
 from pysat.formula import CNF
+from pytest_check import check
 
 from dsharpy.counter import State, Config
 from dsharpy.formula import sat, DCNF, count_sat, Dep, RangeSplitXORGenerator
@@ -120,7 +119,8 @@ void main()
     with check():
         assert ov_possible_variability == 256, "ov_possible_variability"
 
-    val = State.from_string(string, Config(xor_generator=RangeSplitXORGenerator(), amc_epsilon=0.01, amc_delta=0.01)).compute()
+    val = State.from_string(string,
+                            Config(xor_generator=RangeSplitXORGenerator(), amc_epsilon=0.01, amc_delta=0.01)).compute()
     assert val > 240  # maybe?
 
 
@@ -151,6 +151,7 @@ void main()
     val = state.compute()
     assert val == 2
     print(val)
+
 
 def test_recursive_code():
     string = process_code_with_cbmc("""
@@ -477,7 +478,8 @@ MATestCases = {
         }
         """,
         "leakage": (2.8, 2.9)
-    }, # omitted the other test cases from https://github.com/parttimenerd/nildumu/blob/master/src/main/java/nildumu/eval/specimen/eval
+    },
+    # omitted the other test cases from https://github.com/parttimenerd/nildumu/blob/master/src/main/java/nildumu/eval/specimen/eval
     # that do not contain loops or recursion
     "binary search": {
         "code": """
@@ -552,4 +554,3 @@ class TestMATests:
         config = config or Config(xor_generator=RangeSplitXORGenerator())
         cnf = DCNF.load_string(process_code_with_cbmc(code, unwind, preprocess=True))
         return math.log2(State(cnf, config).compute_loop(1))
-

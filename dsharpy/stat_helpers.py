@@ -28,7 +28,8 @@ def std_max(sample: List[float], alpha: float) -> float:
     return sqrt((len(sample) - 1) * var(sample) / stats.chi2.ppf(alpha / 2, len(sample) - 1))
 
 
-def probability_of_greater_max(sample: List[float], delta: float, ov_max: float, underlying_alpha: float = 0.05) -> float:
+def probability_of_greater_max(sample: List[float], delta: float, ov_max: float,
+                               underlying_alpha: float = 0.05) -> float:
     m = mean_max(sample, underlying_alpha)
     s = std_max(sample, underlying_alpha)
     val = math.ceil(delta * max(sample))
@@ -37,6 +38,6 @@ def probability_of_greater_max(sample: List[float], delta: float, ov_max: float,
     print(f"m = {m}, s={s}, val={val}, val0={ov}")
     return 1 - distr.cdf(val) / ov
 
-if __name__ == '__main__':
-    print(probability_of_greater_max([2,2,2,2,2,2,2,2,2,2], 1.1, 5))
 
+if __name__ == '__main__':
+    print(probability_of_greater_max([2, 2, 2, 2, 2, 2, 2, 2, 2, 2], 1.1, 5))

@@ -13,16 +13,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, Sized
+from typing import List, Set, Tuple, Optional, Union, Iterable, Deque
 
 from pysat.formula import CNF
 
-from dsharpy.util import binary_path, empty, random_bool, random_split, bit_count, ints_with_even_bit_count
+from dsharpy.util import binary_path, empty, random_bool, random_split, ints_with_even_bit_count
 
 
 @dataclass(frozen=True)
 class Dep:
-
     param: Set[int]
     ret: Set[int]
     constraint: Set[int] = field(default_factory=set)
@@ -44,10 +43,12 @@ class Dep:
         def split(part: str) -> Set[int]:
             return {int(i) for i in part.split(" ") if len(i) and i != "0"}
 
-        return Dep(split(param_part), split(ret_part), split(constraint_part[0]) if len(constraint_part) == 1 else set())
+        return Dep(split(param_part), split(ret_part),
+                   split(constraint_part[0]) if len(constraint_part) == 1 else set())
 
     def __str__(self) -> str:
         return f"{self.param} ~{self.constraint}~> {self.ret}"
+
 
 Deps = List[Dep]
 
@@ -413,7 +414,6 @@ def trim_dcnf_graph(graph: CNFGraph, anchors: Iterable[int] = None) -> DCNF:
 
 @dataclass(frozen=True)
 class XOR:
-
     atoms: List[int]
 
     def to_dimacs(self, new_start: int) -> List[List[int]]:
@@ -430,12 +430,12 @@ class XOR:
         return set(abs(x) for x in self.atoms)
 
     def count_sat(self, **kwargs):
-        return count_sat(DCNF(from_clauses=self.to_dimacs(max(self.variables()) + 1)).set_ind(self.variables()), **kwargs)
+        return count_sat(DCNF(from_clauses=self.to_dimacs(max(self.variables()) + 1)).set_ind(self.variables()),
+                         **kwargs)
 
 
 @dataclass(frozen=True)
 class XORs:
-
     xors: List[XOR]
 
     def to_dimacs(self, new_start: int):
@@ -501,4 +501,5 @@ class RangeSplitXORGenerator(OverapproxXORGenerator):
     """
 
     def _generate(self, variables: List[int], variability: int) -> XORs:
-        return XORs([XOR(part).randomize() for part in random_split(variables, len(variables) - variability, min_size=1)])
+        return XORs(
+            [XOR(part).randomize() for part in random_split(variables, len(variables) - variability, min_size=1)])

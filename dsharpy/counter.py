@@ -4,16 +4,14 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from random import random
 from statistics import median
-from tempfile import TemporaryDirectory
-from typing import Tuple, Set, List, Dict, Optional, Union, cast, Iterable
+from typing import Tuple, Set, List, Optional, Union, Iterable
 
 import click as click
 from pysat.formula import CNF
 
 from dsharpy.formula import count_sat, DCNF, sat, CNFGraph, Dep, trim_dcnf, \
-    RangeSplitXORGenerator, XORGenerator, XORs, FullyRandomXORGenerator
+    RangeSplitXORGenerator, XORGenerator, XORs
 from dsharpy.util import random_seed, has_modified_cbmc, process_path_with_cbmc
 
 
@@ -122,10 +120,13 @@ class State:
             # only use the xor clauses if they lead to a satisfying variability
             # Todo: this might never end
             count = 0
-            while count < 10 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret, dep.constraint)) != 2 ** min(len(dep.ret),
-                                                                                                      math.ceil(available_variability_bits)):
+            while count < 10 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret,
+                                                                                 dep.constraint)) != 2 ** min(
+                    len(dep.ret),
+                    math.ceil(available_variability_bits)):
                 print(f"# {math.log2(var) if var != 0 else 'unsat'} vs {available_variability_bits}")
-                new_clauses = self.create_random_xor_clauses(dep.ret, available_variability_bits).to_dimacs(self.cnf.nv + 1)
+                new_clauses = self.create_random_xor_clauses(dep.ret, available_variability_bits).to_dimacs(
+                    self.cnf.nv + 1)
                 count += 1
         new_state.cnf.extend(new_clauses)
         return new_state.compute()

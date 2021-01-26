@@ -14,7 +14,6 @@ from dsharpy.formula import DCNF, Dep
 
 @dataclass
 class Node:
-
     sat_var: Optional[int]
     neighbors: List["Node"]
     var: Optional["VarNode"] = field(default_factory=lambda: None)
@@ -103,7 +102,6 @@ class ParentId:
 
 @dataclass
 class Aborted:
-
     parent: Optional[ParentId]
     representative: "Aborted"
 
@@ -113,7 +111,8 @@ class Aborted:
         return self.representative == self
 
     def guard_conjunction(self) -> Set[int]:
-        return {sat_var.sat_var * (1 if is_true else -1) for guard, is_true in self.guards for sat_var in guard.sat_vars if sat_var.sat_var}
+        return {sat_var.sat_var * (1 if is_true else -1) for guard, is_true in self.guards for sat_var in guard.sat_vars
+                if sat_var.sat_var}
 
 
 def vars_to_name_mapping(var_nodes: List[VarNode]) -> loop_tree.NameMapping:
@@ -147,7 +146,8 @@ class LoopIter(Aborted):
 
     def compute_dependencies(self) -> Dep:
         """ requires that set_var_deps has been called on all VarNodes before """
-        return Dep(set(var_nodes_to_ints(self.input_that_outputs_might_depend_on())), set(var_nodes_to_ints(self.output)), self.guard_conjunction())
+        return Dep(set(var_nodes_to_ints(self.input_that_outputs_might_depend_on())),
+                   set(var_nodes_to_ints(self.output)), self.guard_conjunction())
 
     def compute_dependency_strings(self) -> str:
         return self.compute_dependencies().to_comment()
@@ -220,12 +220,12 @@ class Graph:
     @staticmethod
     def is_sat_line(line: str) -> bool:
         return line.endswith(" 0") and (
-                    line.split(" ", maxsplit=1)[0].isdigit() or (line.startswith("-") and line[1].isdigit()))
+                line.split(" ", maxsplit=1)[0].isdigit() or (line.startswith("-") and line[1].isdigit()))
 
     @staticmethod
     def is_var_line(line: str) -> bool:
         return line.startswith("c ") and (
-                    line.split(" ")[-1].split("-")[-1].isdigit() or line.endswith("FALSE") or line.endswith("TRUE"))
+                line.split(" ")[-1].split("-")[-1].isdigit() or line.endswith("FALSE") or line.endswith("TRUE"))
 
     @staticmethod
     def is_relate_line(line: str) -> bool:
@@ -247,10 +247,13 @@ class Graph:
         """
         parse lines like "c loop 0 main 0 | parent none | input main::1::num!0@1#2 | guards goto_symex::\\guard#3 | lguard goto_symex::\\guard#3 | linput | loutput | output"
         """
-        id_part, parent_part, input_part, guards_part, lguard_part, linput_part, loutput_part, output_part = line[len("c loop "):].split(" | ")
+        id_part, parent_part, input_part, guards_part, lguard_part, linput_part, loutput_part, output_part = line[len(
+            "c loop "):].split(" | ")
         id_str, func_str, nr_str = id_part.split(" ")
-        iter = LoopIter(self._parse_parent(parent_part), None, self._parse_guards(guards_part[len("guards "):]), int(id_str), func_str, int(nr_str),
-                        *(self._parse_variables(part, remove_first=True) for part in (input_part, lguard_part, linput_part, loutput_part, output_part)))
+        iter = LoopIter(self._parse_parent(parent_part), None, self._parse_guards(guards_part[len("guards "):]),
+                        int(id_str), func_str, int(nr_str),
+                        *(self._parse_variables(part, remove_first=True) for part in
+                          (input_part, lguard_part, linput_part, loutput_part, output_part)))
         self.loop_iters.append(iter)
         if (iter.func_id, iter.nr) not in self.loop_representative:
             self.loop_representative[(iter.func_id, iter.nr)] = iter

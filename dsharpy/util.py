@@ -11,7 +11,7 @@ from io import IOBase
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Iterator, Dict
+from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable
 
 
 def binary_path(program: str) -> Path:
@@ -131,7 +131,8 @@ def has_modified_cbmc() -> bool:
         return False
 
 
-def process_path_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3, rec: int = None, preprocess: bool = True) -> Path:
+def process_path_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3, rec: int = None,
+                           preprocess: bool = True) -> Path:
     """ Returns the temporary CNF file """
     if not c_file.exists():
         raise FileNotFoundError(f"File {c_file} not found")
@@ -142,7 +143,8 @@ def process_path_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3, rec:
     return cnf_path
 
 
-def process_code_with_cbmc(c_code: str, unwind: int = 3, rec: int = None, file_ending: str = ".cpp", preprocess: bool = True) -> str:
+def process_code_with_cbmc(c_code: str, unwind: int = 3, rec: int = None, file_ending: str = ".cpp",
+                           preprocess: bool = True) -> str:
     assert unwind >= 3
     out = StringIO()
     with NamedTemporaryFile(suffix=file_ending) as f:
@@ -183,9 +185,9 @@ def process_with_cbmc(c_file: Path, out: IOBase, unwind: int = 3, rec: int = Non
         raise BaseException("CBMC: " + err)
     from dsharpy import convert
 
-    #print(err)
-    #print(cbmc_out)
-    #print(c_file.read_text())
+    # print(err)
+    # print(cbmc_out)
+    # print(c_file.read_text())
     convert.Graph.process(StringIO(cbmc_out), out, ind_var_prefix="__out")
 
 
