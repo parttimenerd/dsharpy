@@ -46,7 +46,7 @@ c dep 2 0 3
 def test_split_and_more():
     state = State.from_string(BASIC_PROGRAM)
     dep, cnf, new_state = state.split()
-    assert dep == Dep({2}, {3})
+    assert dep == Dep(frozenset([2]), frozenset([3]))
     assert cnf.clauses == [[1, 2]]
     assert "c ind 2 0" in cnf.comments and len(cnf.comments) == 1
     assert not new_state.can_split()
@@ -243,6 +243,30 @@ void main()
     assert state.compute() == 256
 
 
+def test_small_loop_reduced():
+    string = process_code_with_cbmc("""
+char non_det_char();
+char non_det_char2();
+
+void main()
+{
+  char num = non_det_char2();
+  char res = 1;
+  while (res != num) {
+    res = res << 2;
+  }
+  char __out = res;
+  assert(non_det_char());
+}
+""", preprocess=True, unwind=3)
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    ret, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 256
+    assert state.compute() == 256
+
+
 def test_small_loop2():
     string = process_code_with_cbmc("""
 char non_det_char();
@@ -335,6 +359,65 @@ def test_global_variables_with_recursion():
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     assert math.log2(state.compute()) == 32
+
+
+def test_recursive_code_reduced_with_guard_and_abstract_rec():
+    string = process_code_with_cbmc("""
+bool fib(bool num){
+  if (num)
+  {
+    return fib(num);
+  }
+  return num;
+}
+
+void main()
+{
+  bool __out = fib(non_det_bool());
+  END;
+}
+""", rec=0, abstract_rec=0)
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    ret, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 0
+    val = state.compute()
+    assert val == 256  # ABI related, a bool can be any byte
+
+
+def test_recursive_code_reduced_with_guard_and_abstract_rec2():
+    string = process_code_with_cbmc("""
+    bool fib(bool num){ return num ? !fib(num) : num; }
+    void main()
+    {
+      bool __out = fib(non_det_bool());
+      END;
+    }
+    """, rec=0, abstract_rec=0)
+    assert State.from_string(string).compute() == 2  # the boolean negation
+
+
+def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
+    string = process_code_with_cbmc("""
+    bool fib(bool num){
+      return fib(num);
+    }
+
+    void main()
+    {
+      bool __out = fib(non_det_bool());
+      END;
+    }
+    """, rec=0, abstract_rec=0)
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    ret, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 2
+    val = state.compute()
+    assert val == 2
+    print(val)
 
 
 def _id_fn(file: Path) -> str:

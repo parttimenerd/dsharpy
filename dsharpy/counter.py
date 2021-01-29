@@ -109,9 +109,10 @@ class State:
             assert not sat(cnf)
             return new_state.compute()
 
-        # we over approximate the variability
-        available_variability_bits = math.log2(min(available_variability, dep.max_variability or float("inf")))
-        print(f"{dep} (variability: {available_variability_bits:.2f} bits)")
+        # we overapproximate the variability
+        max_variability_bits = math.log2(dep.max_variability) if dep.max_variability else float("inf")
+        available_variability_bits = min(math.log2(available_variability), max_variability_bits)
+        print(f"{dep} (variability: {available_variability_bits:.2f} (max_var: {max_variability_bits:.2f}) bits)")
         constraints: XORs = self.create_random_xor_clauses(dep.ret, available_variability_bits)
         print(f"constraints: {constraints}")
         new_clauses = constraints.to_dimacs(self.cnf.nv + 1)
@@ -122,8 +123,8 @@ class State:
             count = 0
             while count < 10 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret,
                                                                                  dep.constraint)) != 2 ** min(
-                    len(dep.ret),
-                    math.ceil(available_variability_bits)):
+                len(dep.ret),
+                math.ceil(available_variability_bits)):
                 print(f"# {math.log2(var) if var != 0 else 'unsat'} vs {available_variability_bits}")
                 new_clauses = self.create_random_xor_clauses(dep.ret, available_variability_bits).to_dimacs(
                     self.cnf.nv + 1)

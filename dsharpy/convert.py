@@ -4,12 +4,16 @@ Convert the --dimacs output of the modified CBMC
 from collections import deque
 from dataclasses import dataclass, field
 from io import IOBase
-from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple, Deque
+from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple, Deque, Union, FrozenSet
 
 import click
-from pysat.formula import CNF
 
 from dsharpy.formula import DCNF, Dep
+from dsharpy.recursion_graph import NameMapping, RecursionNode, RecursionProcessingResult, \
+    MaxVariabilityRecursionProcessor, \
+    RecursionChild, ApplicableCNF, Clause, parse_variable
+
+Origin = Union[Dep, RecursionChild, int]
 
 
 @dataclass
@@ -17,6 +21,8 @@ class Node:
     sat_var: Optional[int]
     neighbors: List["Node"]
     var: Optional["VarNode"] = field(default_factory=lambda: None)
+    origin: List[Origin] = field(default_factory=list)
+    """ Either an aborted recursion, a dependency or a clause (index into cnf.clauses) """
 
     def __str__(self):
         return str(self.sat_var)
@@ -91,7 +97,7 @@ class VarNode:
 
 
 def var_nodes_to_ints(var_nodes: Iterable[VarNode]) -> Iterable[int]:
-    return list(v.sat_var for o in var_nodes for v in o.sat_vars)
+    return list(v.sat_var for o in var_nodes for v in o.sat_vars if v.sat_var)
 
 
 @dataclass(frozen=True)
@@ -110,13 +116,10 @@ class Aborted:
     def self_representative(self) -> bool:
         return self.representative == self
 
-    def guard_conjunction(self) -> Set[int]:
-        return {sat_var.sat_var * (1 if is_true else -1) for guard, is_true in self.guards for sat_var in guard.sat_vars
-                if sat_var.sat_var}
-
-
-def vars_to_name_mapping(var_nodes: List[VarNode]) -> loop_tree.NameMapping:
-    return loop_tree.NameMapping({var.name: var_nodes_to_ints([var]) for var in var_nodes})
+    def guard_conjunction(self) -> FrozenSet[int]:
+        return frozenset(
+            sat_var.sat_var * (1 if is_true else -1) for guard, is_true in self.guards for sat_var in guard.sat_vars
+            if sat_var.sat_var)
 
 
 @dataclass(eq=True)
@@ -144,13 +147,10 @@ class LoopIter(Aborted):
         meta_node.var_deps.update(set(v for o in self.last_iter_output for v in o.var_deps))
         return meta_node.compute_others(self.input, self.last_iter_output)
 
-    def compute_dependencies(self) -> Dep:
+    def compute_dependency(self) -> Dep:
         """ requires that set_var_deps has been called on all VarNodes before """
-        return Dep(set(var_nodes_to_ints(self.input_that_outputs_might_depend_on())),
-                   set(var_nodes_to_ints(self.output)), self.guard_conjunction())
-
-    def compute_dependency_strings(self) -> str:
-        return self.compute_dependencies().to_comment()
+        return Dep(frozenset(var_nodes_to_ints(self.input_that_outputs_might_depend_on())),
+                   frozenset(var_nodes_to_ints(self.output)), self.guard_conjunction())
 
     def __hash__(self):
         return hash([self.id, self.func_id, self.nr])
@@ -162,11 +162,10 @@ class AbortedRecursion(Aborted):
     returns: List[VarNode]
     params: List[VarNode]
 
-    def compute_dependencies(self) -> Dep:
-        return Dep(set(var_nodes_to_ints(self.params)), set(var_nodes_to_ints(self.returns)), self.guard_conjunction())
-
-    def compute_dependency_strings(self) -> str:
-        return self.compute_dependencies().to_comment()
+    def compute_dependency(self) -> Dep:
+        return Dep(frozenset(var_nodes_to_ints(self.params)),
+                   frozenset(var_nodes_to_ints(self.returns)),
+                   self.guard_conjunction())
 
     def __hash__(self):
         return hash(self.id)
@@ -175,7 +174,7 @@ class AbortedRecursion(Aborted):
 class Graph:
 
     def __init__(self):
-        self.cnf = CNF()
+        self.cnf = DCNF()
         self.var_nodes: Dict[str, VarNode] = {}
         self.sat_nodes: List[Node] = []
         self.loop_iters: List[LoopIter] = []
@@ -183,6 +182,9 @@ class Graph:
         self.recursions: List[AbortedRecursion] = []
         self.recursion_representative: Dict[str, AbortedRecursion] = {}
         self.relations: List[List[VarNode]] = []
+        self.rec_nodes: Dict[str, RecursionNode] = {}
+        self._finished_rec_nodes = False
+        self.rec_children: List[RecursionChild] = []
 
     def get_sat_node(self, var: int) -> Node:
         var = abs(var)
@@ -293,6 +295,7 @@ class Graph:
         self.cnf.append(clause)
         vars = [self.get_sat_node(i) for i in clause]
         new_node = Node(None, vars)
+        new_node.origin.append(len(self.cnf.clauses) - 1)
         for var in vars:
             var.neighbors.append(new_node)
 
@@ -316,7 +319,7 @@ class Graph:
         orig_sat.neighbors.append(sat)
         sat.neighbors.append(orig_sat)
 
-    def parse_relate_line(self, line: str):
+    def _parse_relate_line(self, line: str):
         self.relations.append([self.get_var_node(part) for part in line.split(" ")[2:]])
 
     def find_ind_vars(self, ind_var_prefix: str) -> Iterable[int]:
@@ -324,11 +327,137 @@ class Graph:
                      ("::" + ind_var_prefix + "!") in var_node.name and var_node.name.endswith("#2")]
         return var_nodes_to_ints(variables)
 
+    def _add_dep(self, dep: Dep):
+        self.cnf.add_dep(dep)
+        rel = []
+        for vs in [dep.param, dep.ret, dep.constraint]:
+            for v in vs:
+                var_node = self.get_sat_node(v)
+                var_node.origin.append(dep)
+        self._relate(rel)
+
+    def _parse_dep(self, line: str):
+        dep = Dep.from_comment(line)
+        self._add_dep(dep)
+
+    @staticmethod
+    def is_recursion_child_line(line: str) -> bool:
+        return line.startswith("c rec child ")
+
+    def _parse_mapping(self, part: str, tag: str) -> NameMapping:
+        """
+        Parses "TAG VAR_1 ACTUAL_VAR_1 … VAR_N ACTUAL_VAR_N" into a name mapping
+
+        Only valid if all variable lines are parsed
+        """
+        assert part.startswith(tag)
+        mapping: Dict[str, Clause] = {}
+        parts = part[len(tag) + 1:].split(" ")
+        for i in range(0, len(parts), 2):
+            variables = [parse_variable(v) for v in self.get_var_node(parts[i + 1]).raw_sat]
+            assert variables
+            mapping[parts[i]] = variables
+        return NameMapping(mapping)
+
+    def _parse_rec_child_line(self, line: str):
+        """ Only valid if all variable lines are parsed """
+        id_and_func_part, input_part, output_part, constraint_part = line[len("c rec child "):].split(" | ")
+        id_part, func_name = id_and_func_part.strip().split(" ")
+        rec_child = RecursionChild(self.rec_nodes, int(id_part), func_name,
+                                   self._parse_mapping(input_part, "input"),
+                                   self._parse_mapping(output_part, "output"),
+                                   {int(v.sat_var) for var in constraint_part.split(" ") if var != "0"
+                                    for v in self.get_var_node(var).sat_vars if v.sat_var})
+        self.rec_children.append(rec_child)
+        rel = []
+        for vs in [rec_child.input.combined_clause(), rec_child.output.combined_clause(), rec_child.constraint]:
+            for v in vs:
+                var_node = self.get_sat_node(v)
+                var_node.origin.append(rec_child)
+                rel.append(var_node)
+        self._relate(rel)
+
+    @staticmethod
+    def _relate(sat_nodes: List[Node]):
+        var = Node(None, sat_nodes)
+        for sat_node in sat_nodes:
+            sat_node.neighbors.append(var)
+
+    @staticmethod
+    def is_recursion_node_line(line: str) -> bool:
+        return line.startswith("c rec node ")
+
+    def _parse_recursion_nodes_line(self, line: str):
+        """ Only valid if all variable lines are parsed """
+        func_id_part, input_part, output_part = line[len("c rec node "):].split(" | ")
+        func_id = func_id_part.strip()
+
+        inputs = self._parse_mapping(input_part, "input")
+        outputs = self._parse_mapping(output_part, "output")
+
+        self.rec_nodes[func_id] = RecursionNode(func_id, ApplicableCNF(inputs, outputs, [], []), [])
+
+    @staticmethod
+    def _find_origins(start_nodes: List[Node]) -> Set[Origin]:
+        origins: Set[Origin] = set()
+
+        def visit(node: Node):
+            origins.update(node.origin)
+            return node.neighbors
+
+        bfs(start_nodes, visit)
+        return origins
+
+    def _create_recursion_graph(self) -> List[RecursionNode]:
+        """
+        Creates the proper recursion nodes and remove the deps and children from the graph that belong
+        to a recursion node
+        """
+        if self._finished_rec_nodes or not self.rec_nodes:
+            return list(self.rec_nodes.values())
+        rec_children: Set[RecursionChild] = set(self.rec_children)
+        deps: Set[Dep] = set(self.cnf.deps)
+        clauses: Set[int] = set(range(len(self.cnf.clauses)))
+
+        for node in self.rec_nodes.values():
+            node_deps: Set[Dep] = set()
+            node_children: Set[RecursionChild] = set()
+            node_clauses: Set[int] = set()
+
+            for origin in self._find_origins([self.get_sat_node(var) for var in node.acnf.input.combined_clause()]):
+                if isinstance(origin, Dep):
+                    node_deps.add(origin)
+                    deps.remove(origin)
+                elif isinstance(origin, RecursionChild):
+                    node_children.add(origin)
+                    rec_children.remove(origin)
+                else:
+                    assert isinstance(origin, int)
+                    node_clauses.add(origin)
+                    clauses.remove(origin)
+
+            node.children = list(node_children)
+            node.acnf.deps = list(node_deps)
+            node.acnf.clauses = [self.cnf.clauses[i] for i in node_clauses]
+
+        self.rec_children = list(rec_children)
+        self.cnf.set_deps(list(deps))
+        self.cnf.clauses = [self.cnf.clauses[i] for i in clauses]
+        self._finished_rec_nodes = True
+        return list(self.rec_nodes.values())
+
+    def process_recursion_graph(self) -> RecursionProcessingResult:
+        # todo: currently only uses the default config for variability over approximation
+        from dsharpy.counter import State
+        return MaxVariabilityRecursionProcessor(self._create_recursion_graph(), lambda c: State(c).compute()).run()
+
     @classmethod
-    def process(cls, infile: IOBase, out: IOBase, ind_var_prefix: str = None):
+    def parse_graph(cls, raw_lines: List[str], ind_var_prefix: str = None) -> "Graph":
         graph = Graph()
         lines = []
-        for line in infile.readlines():
+        recursion_child_lines: List[str] = []
+        recursion_node_lines: List[str] = []
+        for line in raw_lines:
             line = line.strip()
             if Graph.is_loop_line(line):
                 graph._parse_loop_line(line)
@@ -343,17 +472,45 @@ class Graph:
             elif Graph.is_recursion_line(line):
                 graph._parse_recursion_line(line)
             elif Graph.is_relate_line(line):
-                graph.parse_relate_line(line)
+                graph._parse_relate_line(line)
+            elif Graph.is_recursion_child_line(line):
+                recursion_child_lines.append(line)
+            elif Graph.is_recursion_node_line(line):
+                recursion_node_lines.append(line)
+            elif line.startswith("c dep "):
+                graph._parse_dep(line)
             elif line.startswith("c ") or line.startswith("p "):
                 lines.append(line)
                 graph.cnf.comments.append(line)
+        for recursion_child_line in recursion_child_lines:
+            graph._parse_rec_child_line(recursion_child_line)
+        for recursion_node_line in recursion_node_lines:
+            graph._parse_recursion_nodes_line(recursion_node_line)
         graph.update_var_deps()
         if ind_var_prefix:
             ind = graph.find_ind_vars(ind_var_prefix)
-            graph.cnf.comments.append(DCNF.format_ind_comment(ind))
+            graph.cnf.add_ind(*ind)
         for loop_iter in graph.loop_iters + graph.recursions:
-            graph.cnf.comments.append(loop_iter.compute_dependency_strings())
-        graph.cnf.to_fp(out)
+            graph._add_dep(loop_iter.compute_dependency())
+
+        proc_res = graph.process_recursion_graph()
+        for rec_child in graph.rec_children:
+            constraint_var = graph.cnf.nv + 1
+            graph.cnf.append([-v for v in rec_child.constraint] + [constraint_var])
+            app = proc_res.to_applicable(rec_child.node)
+            applied_app = app.apply(graph.cnf.nv + 1, rec_child.input, rec_child.output)
+            dcnf = applied_app.to_cnf()
+            for clause in dcnf.clauses:
+                graph.cnf.append([-constraint_var] + clause)
+            for dep in dcnf.deps:
+                graph.cnf.add_dep(
+                    Dep(dep.param, dep.ret, frozenset((constraint_var, *dep.constraint)), dep.max_variability))
+
+        return graph
+
+    @classmethod
+    def process(cls, infile: IOBase, out: IOBase, ind_var_prefix: str = None):
+        cls.parse_graph(infile.readlines(), ind_var_prefix).cnf.to_fp(out)
 
 
 @click.command(name="convert", help="""

@@ -13,7 +13,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Set, Tuple, Optional, Union, Iterable, Deque
+from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, FrozenSet
 
 from pysat.formula import CNF
 
@@ -22,10 +22,17 @@ from dsharpy.util import binary_path, empty, random_bool, random_split, ints_wit
 
 @dataclass(frozen=True)
 class Dep:
-    param: Set[int]
-    ret: Set[int]
-    constraint: Set[int] = field(default_factory=set)
+    param: FrozenSet[int]
+    """ > 0"""
+    ret: FrozenSet[int]
+    """ > 0 """
+    constraint: FrozenSet[int] = field(default_factory=frozenset)
     max_variability: Optional[float] = None
+    """ >= 0 """
+
+    def __post_init__(self):
+        assert all(v > 0 for vs in [self.param, self.ret] for v in vs)
+        assert self.max_variability is None or self.max_variability >= 0
 
     def empty(self) -> bool:
         return not len(self.ret)
@@ -43,14 +50,17 @@ class Dep:
         atoms = comment[len("c dep "):].split(" ")
         param_part, ret_part, constraint_part, max_dep_part = ("  ".join(atoms) + " 0  0  0  ").split(" 0 ", maxsplit=3)
 
-        def split(part: str) -> Set[int]:
-            return {int(i) for i in part.split(" ") if len(i) and i != "0"}
+        def split(part: str) -> FrozenSet[int]:
+            return frozenset(int(i) for i in part.split(" ") if len(i) and i != "0")
 
         return Dep(split(param_part), split(ret_part), split(constraint_part),
-                   float(max_dep_part.strip().split(" ")[0]) if max_dep_part.startswith(" ") else None)
+                   float(val) if (val := max_dep_part.strip().split(" ")[0]) != "0" else None)
 
     def __str__(self) -> str:
         return f"{self.param} ~{self.constraint}~{self.max_variability or 'inf'}~> {self.ret}"
+
+    def max_var(self) -> int:
+        return max(abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs)
 
 
 Deps = List[Dep]

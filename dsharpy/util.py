@@ -143,14 +143,14 @@ def process_path_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3, rec:
     return cnf_path
 
 
-def process_code_with_cbmc(c_code: str, unwind: int = 3, rec: int = None, file_ending: str = ".cpp",
-                           preprocess: bool = True) -> str:
+def process_code_with_cbmc(c_code: str, unwind: int = 3, rec: int = None, abstract_rec: int = None,
+                           file_ending: str = ".cpp", preprocess: bool = True) -> str:
     assert unwind >= 3
     out = StringIO()
     with NamedTemporaryFile(suffix=file_ending) as f:
         f.write(c_code.encode())
         f.flush()
-        process_with_cbmc(Path(f.name), out, unwind, rec, preprocess)
+        process_with_cbmc(Path(f.name), out, unwind, rec, abstract_rec, preprocess)
     return out.getvalue()
 
 
@@ -167,18 +167,21 @@ def preprocess_c_code(c_code: str) -> str:
     return "\n".join(new_lines_to_add + lines)
 
 
-def process_with_cbmc(c_file: Path, out: IOBase, unwind: int = 3, rec: int = None, preprocess: bool = False):
+def process_with_cbmc(c_file: Path, out: IOBase, unwind: int = 3, rec: int = None, abstract_rec: int = None,
+                      preprocess: bool = False):
     if preprocess:
         with NamedTemporaryFile(suffix=c_file.suffix) as f:
             f.write(preprocess_c_code(c_file.read_text()).encode())
             f.flush()
-            process_with_cbmc(Path(f.name), out, unwind, rec, preprocess=False)
+            process_with_cbmc(Path(f.name), out, unwind, rec, abstract_rec, preprocess=False)
         return
-    my_env = os.environ.copy()
+    env = os.environ.copy()
     if rec is not None:
-        my_env.update({"REC": str(rec)})
+        env.update({"REC": str(rec)})
+    if abstract_rec is not None:
+        env.update({"REC_GRAPH_INLINING": str(abstract_rec)})
     res = subprocess.run([modified_cbmc_path(), str(c_file), "--unwind", str(unwind), "--dimacs"],
-                         stdout=subprocess.PIPE, bufsize=-1, stderr=subprocess.PIPE, env=my_env)
+                         stdout=subprocess.PIPE, bufsize=-1, stderr=subprocess.PIPE, env=env)
     err = res.stderr.decode()
     cbmc_out = res.stdout.decode()
     if "Failed" in err or "Usage" in err or "ERROR" in err or "exception" in err or "0" not in cbmc_out or " failed" in err:
