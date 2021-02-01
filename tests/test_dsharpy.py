@@ -420,6 +420,31 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
     print(val)
 
 
+def compute_with_abstract_rec(code: str, expected_deps: int) -> int:
+    string = process_code_with_cbmc(code, CBMCOptions(rec=0, abstract_rec=0))
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == expected_deps
+    # ret, cnf, new_state = state.split()
+    # available_variability = state._count_sat(cnf)
+    # assert math.log2(available_variability) == 31
+    val = state.compute()
+    return math.log2(val)
+
+
+def test_abstract_rec_with_const_arg():
+    compute_with_abstract_rec("""
+    bool fib(bool num){
+      return fib(num);
+    }
+
+    void main()
+    {
+      bool __out = fib(1);
+      END;
+    }
+    """, expected_deps=1) == 1
+
+
 def test_basic_java():
     string = process_code_with_jbmc("""
     static int __out = 0;
