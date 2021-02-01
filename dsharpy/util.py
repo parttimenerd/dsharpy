@@ -6,6 +6,9 @@ import os
 import random
 import secrets
 import subprocess
+import tempfile
+from dataclasses import dataclass
+from enum import Enum
 from io import IOBase
 
 from io import StringIO
@@ -123,6 +126,14 @@ def modified_cbmc_path() -> Path:
     return next(f for f in (dsharpy_base / "util" / "cbmc" / "build").rglob("cbmc") if f.is_file()).absolute()
 
 
+def jbmc_models_path() -> Path:
+    return (Path(__file__).parent.parent / "util" / "cbmc" / "jbmc" / "lib" / "java-models-library" / "target").absolute()
+
+
+def jbmc_models_classpath() -> str:
+    return f"{jbmc_models_path()}/core-models.jar:{jbmc_models_path()}/cprover-api.jar"
+
+
 def has_modified_cbmc() -> bool:
     try:
         subprocess.run([str(modified_cbmc_path()), "-h"], check=True, capture_output=False, stdout=subprocess.DEVNULL)
@@ -130,27 +141,37 @@ def has_modified_cbmc() -> bool:
     except subprocess.CalledProcessError:
         return False
 
+@dataclass
+class CBMCOptions:
 
-def process_path_with_cbmc(c_file: Path, tmp_folder: Path, unwind: int = 3, rec: int = None,
-                           preprocess: bool = True) -> Path:
+    unwind: int = 3
+    rec: int = None
+    abstract_rec: int = None
+    """ Use abstract with depth """
+    preprocess: bool = True
+
+    def __post_init__(self):
+        assert self.unwind >= 3
+
+
+def process_path_with_cbmc(c_file: Path, tmp_folder: Path, options: CBMCOptions = None) -> Path:
     """ Returns the temporary CNF file """
     if not c_file.exists():
         raise FileNotFoundError(f"File {c_file} not found")
     cnf_path = tmp_folder / (c_file.name + ".cnf")
     with c_file.open() as f:
         with cnf_path.open("w") as out:
-            process_with_cbmc(Path(f.name), out, unwind, rec, preprocess)
+            process_with_cbmc(Path(f.name), out, options)
     return cnf_path
 
 
-def process_code_with_cbmc(c_code: str, unwind: int = 3, rec: int = None, abstract_rec: int = None,
-                           file_ending: str = ".cpp", preprocess: bool = True) -> str:
-    assert unwind >= 3
+def process_code_with_cbmc(c_code: str, options: CBMCOptions = None,
+                           file_ending: str = ".cpp") -> str:
     out = StringIO()
     with NamedTemporaryFile(suffix=file_ending) as f:
         f.write(c_code.encode())
         f.flush()
-        process_with_cbmc(Path(f.name), out, unwind, rec, abstract_rec, preprocess)
+        process_with_cbmc(Path(f.name), out, options)
     return out.getvalue()
 
 
@@ -167,31 +188,90 @@ def preprocess_c_code(c_code: str) -> str:
     return "\n".join(new_lines_to_add + lines)
 
 
-def process_with_cbmc(c_file: Path, out: IOBase, unwind: int = 3, rec: int = None, abstract_rec: int = None,
-                      preprocess: bool = False):
-    if preprocess:
+def process_with_cbmc(c_file: Path, out: IOBase, options: CBMCOptions = None):
+    options = options or CBMCOptions()
+    if options.preprocess:
         with NamedTemporaryFile(suffix=c_file.suffix) as f:
             f.write(preprocess_c_code(c_file.read_text()).encode())
             f.flush()
-            process_with_cbmc(Path(f.name), out, unwind, rec, abstract_rec, preprocess=False)
-        return
+            run_cbmc(Path(f.name), out, options)
+    else:
+        run_cbmc(c_file, out, options)
+
+
+
+def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None, cbmc_path: Path = modified_cbmc_path(),
+             misc: List[str] = None, cwd: Path = None, verbose: bool = False, use_latest_ind_var: bool = True):
+    options = options or CBMCOptions()
     env = os.environ.copy()
-    if rec is not None:
-        env.update({"REC": str(rec)})
-    if abstract_rec is not None:
-        env.update({"REC_GRAPH_INLINING": str(abstract_rec)})
-    res = subprocess.run([modified_cbmc_path(), str(c_file), "--unwind", str(unwind), "--dimacs"],
-                         stdout=subprocess.PIPE, bufsize=-1, stderr=subprocess.PIPE, env=env)
+    if options.rec is not None:
+        env.update({"REC": str(options.rec)})
+    if options.abstract_rec is not None:
+        env.update({"REC_GRAPH_INLINING": str(options.abstract_rec)})
+    cmd = [str(cbmc_path), str(c_file), "--unwind", str(options.unwind), "--dimacs"] + (misc or [])
+    if verbose:
+        print(" ".join(cmd))
+    res = subprocess.run(cmd,
+                         stdout=subprocess.PIPE, bufsize=-1, stderr=subprocess.PIPE, env=env,
+                         cwd=str(cwd) if cwd else os.getcwd())
     err = res.stderr.decode()
     cbmc_out = res.stdout.decode()
-    if "Failed" in err or "Usage" in err or "ERROR" in err or "exception" in err or "0" not in cbmc_out or " failed" in err:
+    if "Failed" in err or "Usage" in err or "ERROR" in err or "exception" in err \
+            or "0" not in cbmc_out or " failed" in err or "segmentation fault" in err \
+            or "segmentation fault" in cbmc_out or res.returncode < 0:
         raise BaseException("CBMC: " + err)
     from dsharpy import convert
 
-    # print(err)
-    # print(cbmc_out)
-    # print(c_file.read_text())
-    convert.Graph.process(StringIO(cbmc_out), out, ind_var_prefix="__out")
+    if verbose:
+        print(err)
+        print(cbmc_out)
+        if isinstance(c_file, Path):
+            print(c_file.read_text())
+    convert.Graph.process(StringIO(cbmc_out), out, ind_var_prefix="__out", use_latest_ind_var=True)
+
+
+class JavaSourceType(Enum):
+
+    JAVA = ".java"
+
+
+def preprocess_java(code: str):
+    return f"""
+    import org.cprover.CProver;
+    public class __base_class {{
+        
+        static int non_det(){{ return CProver.nondetInt(); }}
+        
+        static char non_det_char(){{ return CProver.nondetChar(); }}
+        
+        static boolean non_det_bool(){{ return CProver.nondetBoolean(); }}
+        
+        {code.replace('END', 'assert(CProver.nondetBoolean())')}
+    
+    }}
+    """
+
+
+def build_java(code: str) -> Path:
+    tmp_dir = Path(tempfile.mkdtemp())
+    tmp_dir2 = Path(tempfile.mkdtemp())
+    java_file = tmp_dir2 / "__base_class.java"
+    java_file.write_text(code)
+    print(code)
+    cmd = f"cd {tmp_dir.absolute()}; javac {java_file.absolute()} -cp {jbmc_models_classpath()} -d ."
+    print(cmd)
+    subprocess.check_call(cmd, shell=True)
+    return tmp_dir
+
+
+def process_code_with_jbmc(code: str, code_type: JavaSourceType = JavaSourceType.JAVA, options: CBMCOptions = None) -> str:
+    options = options or CBMCOptions()
+    assert options.preprocess
+    out = StringIO()
+    classpath = build_java(preprocess_java(code)).absolute()
+    run_cbmc("__base_class", out, options, cbmc_path=modified_cbmc_path().parent / "jbmc",
+             misc=["--classpath", f"{jbmc_models_classpath()}:{classpath}"], cwd=classpath)
+    return out.getvalue()
 
 
 def empty(iterable: Iterable) -> bool:

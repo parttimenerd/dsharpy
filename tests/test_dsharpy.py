@@ -10,7 +10,7 @@ from pytest_check import check
 
 from dsharpy.counter import State, Config
 from dsharpy.formula import sat, DCNF, count_sat, Dep, RangeSplitXORGenerator
-from dsharpy.util import random_seed, process_code_with_cbmc
+from dsharpy.util import random_seed, process_code_with_cbmc, process_code_with_jbmc, CBMCOptions
 from tests.util import load
 
 
@@ -116,7 +116,7 @@ void main()
   char __out = b;
   assert(non_det_char());
 }
-""", preprocess=False)
+""", CBMCOptions(preprocess=False))
     state = State.from_string(string)
     dep, cnf, new_state = state.split()
     for i in dep.param:
@@ -154,7 +154,7 @@ void main()
   // as it is unknown what fib(num) does
   END;
 }
-""", rec=0)
+""", CBMCOptions(rec=0))
     state = State.from_string(string, Config(xor_generator=RangeSplitXORGenerator()))
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
@@ -184,7 +184,7 @@ void main()
   char __out = b;
   assert(non_det_char());
 }
-""", preprocess=False, rec=0)
+""", CBMCOptions(rec=0, preprocess=False))
     state = State.from_string(string, Config(amc_epsilon=0.1))
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
@@ -214,7 +214,7 @@ void main()
   char __out = b;
   assert(non_det_char());
 }
-""", preprocess=True, unwind=3, rec=1)
+""", CBMCOptions(unwind=3, rec=1))
     val = State.from_string(string, Config(check_xors_for_variability=False)).compute()
     assert val == 256
 
@@ -234,7 +234,7 @@ void main()
   char __out = res;
   assert(non_det_char());
 }
-""", preprocess=True, unwind=3)
+""", CBMCOptions(unwind=3))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
@@ -258,7 +258,7 @@ void main()
   char __out = res;
   assert(non_det_char());
 }
-""", preprocess=True, unwind=3)
+""", CBMCOptions(unwind=3))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
@@ -283,7 +283,7 @@ void main()
   char __out = res;
   assert(non_det_char());
 }
-""", preprocess=True)
+""")
     state = State.from_string(string, config=Config(xor_generator=RangeSplitXORGenerator()))
     assert len(state.cnf.deps) == 1
     dep, cnf, new_state = state.split()
@@ -314,7 +314,7 @@ void main()
   char __out = res;
   assert(non_det_char());
 }
-""", preprocess=True)
+""")
     val = State.from_string(string).compute()
     assert val == 256
 
@@ -331,7 +331,7 @@ def test_array_in_loop():
       int __out = arr[4];
       END;
     }
-    """, preprocess=True, unwind=5)
+    """, CBMCOptions(unwind=5))
     val = math.log2(State.from_string(string).compute())
     assert val == 32
 
@@ -355,7 +355,7 @@ def test_global_variables_with_recursion():
       int __out = global;
       END;
     }
-    """, preprocess=True, rec=0)
+    """, CBMCOptions(rec=0))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     assert math.log2(state.compute()) == 32
@@ -376,7 +376,7 @@ void main()
   bool __out = fib(non_det_bool());
   END;
 }
-""", rec=0, abstract_rec=0)
+""", CBMCOptions(rec=0, abstract_rec=0))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
@@ -394,7 +394,7 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec2():
       bool __out = fib(non_det_bool());
       END;
     }
-    """, rec=0, abstract_rec=0)
+    """, CBMCOptions(rec=0, abstract_rec=0))
     assert State.from_string(string).compute() == 2  # the boolean negation
 
 
@@ -409,7 +409,7 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
       bool __out = fib(non_det_bool());
       END;
     }
-    """, rec=0, abstract_rec=0)
+    """, CBMCOptions(rec=0, abstract_rec=0))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
@@ -418,6 +418,36 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
     val = state.compute()
     assert val == 2
     print(val)
+
+
+def test_basic_java():
+    string = process_code_with_jbmc("""
+    static int __out = 0;
+    public static void main(String[] args) {
+      int secret = non_det(); // get a random integer
+      __out = secret;
+      END;
+    }
+    """, )
+    state = State.from_string(string)
+    assert math.log2(state.compute()) == 32
+
+
+def test_basic_java2():
+    string = process_code_with_jbmc("""
+    static int __out = 0;
+    public static void main(String[] args) {
+      int secret = non_det(); // get a random integer
+       int val = secret | 1; // only uneven integers
+      if (val > 32 || val < 0){
+        val = 1;
+      }
+      __out = val;
+      END;
+    }
+    """, )
+    state = State.from_string(string)
+    assert math.log2(state.compute()) == 4  # 16 uneven integers
 
 
 def _id_fn(file: Path) -> str:
@@ -637,15 +667,16 @@ class TestMATests:
             code = MATestCases[code]["code"]
         leakage = d["leakage"]
         unwind = d.get("unwind", 3)
+        options = CBMCOptions(unwind=unwind)
         config = d.get("config", None)
         if isinstance(leakage, tuple):
             leakage_lower_bound, leakage_upper_bound = leakage
-            assert leakage_lower_bound <= TestMATests.compute(code, config, unwind) <= leakage_upper_bound, name
+            assert leakage_lower_bound <= TestMATests.compute(code, config, options) <= leakage_upper_bound, name
         else:
-            assert TestMATests.compute(code, config, unwind) == leakage
+            assert TestMATests.compute(code, config, options) == leakage
 
     @staticmethod
-    def compute(code: str, config: Config = None, unwind: int = 3) -> float:
+    def compute(code: str, config: Config = None, options: CBMCOptions = None) -> float:
         config = config or Config(xor_generator=RangeSplitXORGenerator())
-        cnf = DCNF.load_string(process_code_with_cbmc(code, unwind, preprocess=True))
+        cnf = DCNF.load_string(process_code_with_cbmc(code, options))
         return math.log2(State(cnf, config).compute_loop(1))

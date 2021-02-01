@@ -322,10 +322,17 @@ class Graph:
     def _parse_relate_line(self, line: str):
         self.relations.append([self.get_var_node(part) for part in line.split(" ")[2:]])
 
-    def find_ind_vars(self, ind_var_prefix: str) -> Iterable[int]:
-        variables = [var_node for var_node in self.var_nodes.values() if
-                     ("::" + ind_var_prefix + "!") in var_node.name and var_node.name.endswith("#2")]
-        return var_nodes_to_ints(variables)
+    def find_ind_vars(self, ind_var_prefix: str, use_latest_ind_var: bool = True) -> Iterable[int]:
+        variables: Dict[str, int] = {}
+        for var in [var_node.name for var_node in self.var_nodes.values() if
+                     ("::" + ind_var_prefix) in var_node.name or ("." + ind_var_prefix) in var_node.name]:
+            base, num = var.split("#")
+            if base not in variables:
+                variables[base] = num
+            else:
+                variables[base] = max(variables[base], num)
+
+        return var_nodes_to_ints([self.get_var_node(f"{var}#{num}") for var, num in variables.items()])
 
     def _add_dep(self, dep: Dep):
         self.cnf.add_dep(dep)
@@ -452,7 +459,7 @@ class Graph:
         return MaxVariabilityRecursionProcessor(self._create_recursion_graph(), lambda c: State(c).compute()).run()
 
     @classmethod
-    def parse_graph(cls, raw_lines: List[str], ind_var_prefix: str = None) -> "Graph":
+    def parse_graph(cls, raw_lines: List[str], ind_var_prefix: str = None, use_latest_ind_var: bool = True) -> "Graph":
         graph = Graph()
         lines = []
         recursion_child_lines: List[str] = []
@@ -488,7 +495,7 @@ class Graph:
             graph._parse_recursion_nodes_line(recursion_node_line)
         graph.update_var_deps()
         if ind_var_prefix:
-            ind = graph.find_ind_vars(ind_var_prefix)
+            ind = graph.find_ind_vars(ind_var_prefix, use_latest_ind_var)
             graph.cnf.add_ind(*ind)
         for loop_iter in graph.loop_iters + graph.recursions:
             graph._add_dep(loop_iter.compute_dependency())
@@ -509,8 +516,8 @@ class Graph:
         return graph
 
     @classmethod
-    def process(cls, infile: IOBase, out: IOBase, ind_var_prefix: str = None):
-        cls.parse_graph(infile.readlines(), ind_var_prefix).cnf.to_fp(out)
+    def process(cls, infile: IOBase, out: IOBase, ind_var_prefix: str = None, use_latest_ind_var: bool = True):
+        cls.parse_graph(infile.readlines(), ind_var_prefix, use_latest_ind_var).cnf.to_fp(out)
 
 
 @click.command(name="convert", help="""
