@@ -3,7 +3,8 @@ from pytest_check import check
 
 from dsharpy.formula import Dep
 from dsharpy.recursion_graph import ApplicableCNF, NameMapping, Variable, parse_variable, transpose_clauses, \
-    transpose_dep
+    transpose_dep, RecursionNode, RecursionChild, RecursionProcessingResult
+from dsharpy.util import single
 
 
 @pytest.mark.parametrize("string,expected",
@@ -60,3 +61,45 @@ class TestApplicableCNF:
         res = self.app.apply(10, NameMapping({"in": [7, 8]}), output=None)
         assert res.output["out"] == [11, 12]
         assert res.input["in"] == [7, 8]
+
+
+def test_abstract_rec_to_applicable():
+    """
+    See test_fib_with_abstract_rec() for origin
+
+    rec_child is an application of rec_node, this test case tests that the dependency produced by rec_child is correct
+    """
+
+    # setup code to match roughly the situation
+    node_store = {}
+    rec_node = RecursionNode("fib(char)",
+                             ApplicableCNF(input=NameMapping(base={'fib(char)::num': [82, 83]}),
+                                           output=NameMapping(base={
+                                               'fib(char)#return_value': [166, 167]}),
+                                           clauses=[[-84, -90], [-83, 84, -90], [89, -119, -120],
+                                                    [-89, 119, -120], [89, 119, 120], [-2, -165, 173]], deps=[],
+                                           misc_vars=NameMapping(base={})),
+                             [RecursionChild(node_store=node_store, id=0, node_id='fib(char)', input=NameMapping(
+                                 base={'fib(char)::num': [82, 83]}), output=NameMapping(
+                                 base={'fib(char)#return_value': [158, 159]}),
+                                             constraint={2})])
+    node_store[rec_node.id] = rec_node
+    proc_res = RecursionProcessingResult(max_variability={rec_node: 9})
+    rec_child = RecursionChild(node_store={'fib(char)': rec_node}, id=1, node_id='fib(char)',
+                               input=NameMapping(base={'fib(char)::num': [6, 7]}),
+                               output=NameMapping(
+                                   base={'fib(char)#return_value': [174, 175]}),
+                               constraint={1})
+
+    dep, clauses = proc_res.to_dep(rec_child, 1000)
+    # no constraints are specified
+    assert not clauses
+
+    # param and ret have to be equivalent
+    assert dep.param == frozenset(single(rec_child.input))
+    assert dep.ret == frozenset(single(rec_child.output))
+
+    # this holds also true for the constraints
+    assert dep.constraint == frozenset(rec_child.constraint)
+    # and the max_variability has to be as set in proc_res
+    assert dep.max_variability == proc_res.max_variability[rec_node]

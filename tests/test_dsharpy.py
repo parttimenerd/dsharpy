@@ -8,9 +8,10 @@ import pytest
 from pysat.formula import CNF
 from pytest_check import check
 
+from dsharpy.convert import Graph
 from dsharpy.counter import State, Config
 from dsharpy.formula import sat, DCNF, count_sat, Dep, RangeSplitXORGenerator
-from dsharpy.util import random_seed, process_code_with_cbmc, process_code_with_jbmc, CBMCOptions
+from dsharpy.util import random_seed, process_code_with_cbmc, process_code_with_jbmc, CBMCOptions, single
 from tests.util import load
 
 
@@ -338,11 +339,11 @@ def test_array_in_loop():
 
 def test_global_variables_with_recursion():
     string = process_code_with_cbmc("""
-    int global = 0;
+    char global = 0;
     
-    int func(int H, int m){
+    char func(char H, char m){
         global |= H & (1 << m);
-        if (m < 32){
+        if (m < 8){
             func(H, m + 1);
         }
         return m;
@@ -350,15 +351,38 @@ def test_global_variables_with_recursion():
     
     void main()
     {
-      int H = non_det();
-      func(H, 10);
-      int __out = global;
+      char H = non_det_char();
+      func(H, 0);
+      char __out = global;
       END;
     }
     """, CBMCOptions(rec=0))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
-    assert math.log2(state.compute()) == 32
+    dep, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 256
+
+    assert math.log2(state.compute()) == 8
+
+
+def test_recursion_without_effect():
+    string = process_code_with_cbmc("""
+
+    bool func(bool H){
+        func(H);
+        return 0;
+    }
+
+    void main()
+    {
+      func(non_det_bool());
+      END;
+    }
+    """, CBMCOptions(rec=0))
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    assert math.log2(state.compute()) == 0
 
 
 def test_recursive_code_reduced_with_guard_and_abstract_rec():
@@ -376,14 +400,14 @@ void main()
   bool __out = fib(non_det_bool());
   END;
 }
-""", CBMCOptions(rec=0, abstract_rec=0))
+""", CBMCOptions(rec=0, abstract_rec=0, verbose=True))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
-    assert available_variability == 0
+    assert available_variability == 1
     val = state.compute()
-    assert val == 256  # ABI related, a bool can be any byte
+    assert val == 2  # was 256 before, but maybe this time it isn't ABI related (bool is an byte for ABI)?
 
 
 def test_recursive_code_reduced_with_guard_and_abstract_rec2():
@@ -431,8 +455,23 @@ def compute_with_abstract_rec(code: str, expected_deps: int) -> int:
     return math.log2(val)
 
 
+def test_abstract_rec_with_double_rec():
+    assert compute_with_abstract_rec("""
+    bool fib(bool num){
+      return fib(num);
+    }
+
+    void main()
+    {
+      bool arg = non_det_bool();
+      bool __out = fib(1) && fib(1);
+      END;
+    }
+    """, expected_deps=2) == 0  # this is valid, as fib is a pure function (and its probably known in symex)
+
+
 def test_abstract_rec_with_const_arg():
-    compute_with_abstract_rec("""
+    assert compute_with_abstract_rec("""
     bool fib(bool num){
       return fib(num);
     }
@@ -442,7 +481,47 @@ def test_abstract_rec_with_const_arg():
       bool __out = fib(1);
       END;
     }
-    """, expected_deps=1) == 1
+    """, expected_deps=1) == 0
+
+
+def test_fib_with_abstract_rec():
+    """ Test case is base for test_abstract_rec_to_applicable() in test_recursion_graph """
+
+    def check_graph(g: Graph):
+        # the function fib should have a maximum variability of 9
+        assert single(g.process_recursion_graph().max_variability) == 9
+        # the return value of the function (and thereby __out) should be    (0) ? (1) : (2)    and therefore != (1)
+        assert g.cnf.deps[0].ret != g.cnf.ind
+
+    string = process_code_with_cbmc("""
+char fib(char num){
+  if (num > 0 && num < 9)  // (0)
+  {
+    return fib(num);  // num ~{max: 8}~{one constraint}~> ret    (1)
+  }
+  return 0;  //  (2)
+}
+
+void main()
+{
+  char __out = fib(non_det_char());
+  END;
+}
+
+/*
+Should be transformed into:
+
+__out = (num > 1 && num < 9) ? (num ~{max:8}~> unknown) : 0 // this might produce 9 different numbers in the worst case
+*/
+""", CBMCOptions(rec=0, abstract_rec=0, process_graph=check_graph))
+    state = State.from_string(string)
+    assert len(state.cnf.deps) == 1
+    dep = state.cnf.deps[0]
+    assert len(dep.constraint) == 1
+    ret, cnf, new_state = state.split()
+    available_variability = state._count_sat(cnf)
+    assert available_variability == 8
+    assert state.compute() == 9
 
 
 def test_basic_java():

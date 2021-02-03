@@ -41,7 +41,7 @@ class Dep:
         if self.empty():
             return f"c empty dep from {' '.join(map(str, self.param))}"
         parts = [self.param, self.ret, self.constraint, [self.max_variability or 'inf']]
-        return f"c dep {' 0 '.join(' '.join(map(str, x)) for x in parts)}"
+        return f"c dep {' 0 '.join(' '.join(map(str, sorted(x))) for x in parts)}"
 
     @classmethod
     def from_comment(cls, comment: str) -> "Dep":
@@ -147,7 +147,7 @@ class DCNF(CNF):
     @staticmethod
     def format_ind_comment(ind: Iterable[int]) -> str:
         if not empty(ind):
-            return f"c ind {' '.join(map(str, ind))} 0"
+            return f"c ind {' '.join(map(str, sorted(ind)))} 0"
         return "c ind 0"
 
     @staticmethod
@@ -350,6 +350,8 @@ def count_sat(cnfs: Union[List[CNF], CNF], epsilon: float = 0.8, delta: float = 
             ret = []
             for i, process in enumerate(processes):
                 out, err = process.communicate()
+                if "error" in err.decode() or "permission denied" in err.decode():
+                    raise BaseException(f"ApproxMC error: {err.decode()}")
                 ret.append(_parse_amc_out(used_cnfs[i], out.decode(), err.decode()))
             return ret[0] if is_single else ret
     except:

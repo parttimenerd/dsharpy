@@ -7,14 +7,14 @@ import random
 import secrets
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from io import IOBase
 
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable
+from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Mapping, Callable
 
 
 def binary_path(program: str) -> Path:
@@ -143,12 +143,13 @@ def has_modified_cbmc() -> bool:
 
 @dataclass
 class CBMCOptions:
-
     unwind: int = 3
     rec: int = None
     abstract_rec: int = None
     """ Use abstract with depth """
     preprocess: bool = True
+    verbose: bool = False
+    process_graph: Callable[["convert.Graph"], None] = field(default_factory=lambda: (lambda g: None))
 
     def __post_init__(self):
         assert self.unwind >= 3
@@ -199,7 +200,6 @@ def process_with_cbmc(c_file: Path, out: IOBase, options: CBMCOptions = None):
         run_cbmc(c_file, out, options)
 
 
-
 def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None, cbmc_path: Path = modified_cbmc_path(),
              misc: List[str] = None, cwd: Path = None, verbose: bool = False, use_latest_ind_var: bool = True):
     options = options or CBMCOptions()
@@ -222,12 +222,14 @@ def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None,
         raise BaseException("CBMC: " + err)
     from dsharpy import convert
 
-    if verbose:
+    if verbose or options.verbose:
         print(err)
         print(cbmc_out)
         if isinstance(c_file, Path):
             print(c_file.read_text())
-    convert.Graph.process(StringIO(cbmc_out), out, ind_var_prefix="__out", use_latest_ind_var=True)
+    graph = convert.Graph.parse_graph(cbmc_out.split("\n"), "__out", use_latest_ind_var=True)
+    options.process_graph(graph)
+    graph.cnf.to_fp(out)
 
 
 class JavaSourceType(Enum):
@@ -299,3 +301,11 @@ def bit_count(i: int) -> int:
 def ints_with_even_bit_count(max_int: int) -> List[int]:
     """ Ints with even bit count, up to max_int (inclusive) """
     return [i for i in range(max_int + 1) if bit_count(i) % 2 == 0]
+
+
+K = TypeVar("K")
+V = TypeVar("V")
+
+
+def single(d: Mapping[K, V]) -> V:
+    return next(iter(d.values()))

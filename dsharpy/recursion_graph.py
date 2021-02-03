@@ -94,7 +94,7 @@ def transpose_clauses(clauses: Clauses, mapping: IntToVariableMap) -> Clauses:
 
 @dataclass(frozen=True)
 class NameMapping(Mapping[str, Variables]):
-    base: Dict[str, Variables]
+    base: Dict[str, Variables] = field(default_factory=dict)
 
     def __getitem__(self, name: str) -> Clause:
         return self.base[name]
@@ -135,6 +135,12 @@ class NameMapping(Mapping[str, Variables]):
 
     def __str__(self):
         return str(self.base)
+
+    def max_var(self) -> int:
+        return max((abs(x) for variables in self.base.values() for x in to_abs_variables(variables)), default=0)
+
+    def get_vars(self) -> Set[int]:
+        return {abs(v) for v in self.combined_clause()}
 
 
 def transpose_dep(dep: Dep, mapping: IntToVariableMap) -> Optional[Dep]:
@@ -199,6 +205,9 @@ class ApplicableCNF:
 
     def get_vars(self) -> Set[int]:
         ret = get_vars(self.clauses)
+        ret.update(self.input.get_vars())
+        ret.update(self.output.get_vars())
+        ret.update(self.misc_vars.get_vars())
         for dep in self.deps:
             for l in [dep.param, dep.ret, dep.constraint]:
                 ret.update(abs(v) for v in l)
@@ -227,12 +236,53 @@ class ApplicableCNF:
         return estimator(self.to_cnf().set_ind(self.output.combined_clause()))
 
     def max_var(self) -> int:
-        return max(self.get_vars())
+        return max(self.get_vars(), default=0)
+
+
+class DefaultApplicableCNF(ApplicableCNF):
+
+    def __init__(self):
+        super(DefaultApplicableCNF, self).__init__(NameMapping(), NameMapping(), [], [])
+
+    def add_deps(self, deps: Deps) -> "ApplicableCNF":
+        return self
+
+    def add_clauses(self, clauses: Clauses) -> "ApplicableCNF":
+        return self
+
+    def transpose(self, new_start: int, keep: List[int] = None,
+                  custom_mapping: IntToVariableMap = None) -> "ApplicableCNF":
+        return self
+
+    def apply(self, new_start: int, input: NameMapping, output: Optional[NameMapping]) -> "ApplicableCNF":
+        return self
+
+    def max_var(self) -> int:
+        return 0
+
+
+@dataclass(frozen=True)
+class NodeStore(Mapping[str, "RecursionNode"]):
+    base: Dict[str, "RecursionNode"] = field(default_factory=dict)
+
+    def __getitem__(self, name: str) -> "RecursionNode":
+        if name not in self.base:
+            self.base[name] = DefaultRecursionNode(name)
+        return self.base[name]
+
+    def __setitem__(self, name: str, node: "RecursionNode"):
+        self.base[name] = node
+
+    def __len__(self) -> int:
+        return len(self.base)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.base)
 
 
 @dataclass
 class RecursionChild:
-    node_store: Dict[str, "RecursionNode"]
+    node_store: NodeStore
     id: int
     node_id: str
     input: NameMapping
@@ -277,17 +327,12 @@ class RecursionNode:
         return (child.node for child in self.children)
 
     def to_applicable(self,
-                      child_to_dep: Callable[[RecursionChild, Callable[[], int]], Union[Dep, Tuple[Dep, Clauses]]] =
+                      child_to_dep: Callable[[RecursionChild, int], Union[Dep, Tuple[Dep, Clauses]]] =
                       lambda c, n: Dep(frozenset(c.input.combined_clause()), frozenset(c.output.combined_clause()),
                                        frozenset(c.constraint))) \
             -> ApplicableCNF:
         """ Create an applicable cnf that includes all deps from children """
-        max_var = [0]
-
-        def new_id() -> int:
-            max_var[0] = (max_var[0] or self.acnf.max_var()) + 1
-            return max_var[0]
-
+        new_id = self.acnf.max_var() + 1
         deps = []
         all_clauses = []
         for child in self.children:
@@ -296,14 +341,26 @@ class RecursionNode:
                 dep, clauses = dep_or_tuple, []
             else:
                 dep, clauses = dep_or_tuple
-            max_var[0] = max(max_var[0], dep.max_var(),
-                             max(max(clause) if clause else 0 for clause in clauses) if clauses else 0)
+            new_id = max(new_id, dep.max_var(),
+                         max(max(clause) if clause else 0 for clause in clauses) if clauses else 0) + 1
             deps.append(dep)
             all_clauses.extend(clauses)
         acnf = self.acnf
         if all_clauses:
             acnf = self.acnf.add_clauses(all_clauses)
         return acnf.add_deps(deps)
+
+
+class DefaultRecursionNode(RecursionNode):
+
+    def __init__(self, id: str):
+        super(DefaultRecursionNode, self).__init__(id, DefaultApplicableCNF(), [])
+
+    def to_applicable(self,
+                      child_to_dep: Callable[[RecursionChild, int], Union[Dep, Tuple[Dep, Clauses]]] =
+                      lambda c, n: Dep(frozenset(c.input.combined_clause()), frozenset(c.output.combined_clause()),
+                                       frozenset(c.constraint))) -> ApplicableCNF:
+        return DefaultApplicableCNF()
 
 
 def walk_recursion_nodes(start_nodes: List[RecursionNode], children: Callable[[RecursionNode], Iterable[RecursionNode]],
@@ -367,21 +424,28 @@ class RecursionProcessingResult:
     max_variability: Dict[RecursionNode, float] = field(default_factory=lambda: defaultdict(lambda: float("inf")))
     constraints: Dict[RecursionNode, Clauses] = field(default_factory=lambda: defaultdict(list))
 
-    def to_applicable(self, node: RecursionNode) -> ApplicableCNF:
-        def func(c: RecursionChild, n: Callable[[], int]):
-            orig_dep = Dep(frozenset(c.input.combined_clause()),
-                           frozenset(c.output.combined_clause()),
-                           frozenset(c.constraint), self.max_variability[node])
-            misc_cons = self.constraints[c.node]
-            if misc_cons:
-                new_id = max(n(), orig_dep.max_var() + 1)
-                new_clauses = transpose_clauses(misc_cons, create_mapping(get_vars(misc_cons), new_id + 1))
-                new_clauses_impl = [[-new_id] + clause for clause in new_clauses]
-                return Dep(orig_dep.param, orig_dep.ret, frozenset((new_id, *orig_dep.constraint)),
-                           orig_dep.max_variability), new_clauses
-            return orig_dep
+    def to_dep(self, child: RecursionChild, start_id: int) -> Tuple[Dep, Clauses]:
+        """
+        Creates a dep with constraint for a given recursion child.
 
-        return node.to_applicable(func)
+        :param start_id: start id for new variables for created clauses
+        :return: dep and constraint clauses for the passed recursion child
+        """
+        dep = Dep(frozenset(child.input.combined_clause()),
+                  frozenset(child.output.combined_clause()),
+                  frozenset(child.constraint), self.max_variability[child.node])
+        misc_cons = self.constraints[child.node]
+        if misc_cons:
+            assert start_id > dep.max_var()
+            new_clauses = transpose_clauses(misc_cons, create_mapping(get_vars(misc_cons), start_id + 1))
+            new_clauses_impl = [[-start_id] + clause for clause in new_clauses]
+            return Dep(dep.param, dep.ret, frozenset({start_id, *dep.constraint}),
+                       dep.max_variability), new_clauses_impl
+        return dep, []
+
+    def to_full_applicable(self, node: RecursionNode) -> ApplicableCNF:
+        """ Maps the recursion node to a full applicable CNF with all clauses and deps for every child """
+        return node.to_applicable(self.to_dep)
 
     def update(self, node: RecursionNode, max_variability: float) -> bool:
         cur = self.max_variability[node]
@@ -414,7 +478,7 @@ class MaxVariabilityRecursionProcessor(RecursionProcessor):
         return self.state.update(node, self._calculate_max_variability(node))
 
     def _calculate_max_variability(self, node: RecursionNode) -> float:
-        return self.state.to_applicable(node).count_sat(self.variability_estimator)
+        return self.state.to_full_applicable(node).count_sat(self.variability_estimator)
 
 
 class BitGraph:

@@ -17,7 +17,7 @@ def test_process_invalid_code():
           int __out = non;_det();
           assert(__out);
         }
-        """, preprocess=True))
+        """))
 
 
 def test_process_code():
@@ -27,7 +27,7 @@ void main()
   int __out = non_det();
   assert(__out);
 }
-""", preprocess=True))
+"""))
     assert len(dcnf.ind) == 32
 
 

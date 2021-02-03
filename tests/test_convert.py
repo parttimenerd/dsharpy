@@ -3,7 +3,7 @@ Black box tests for the conversion and the modified CBMC
 """
 
 from dsharpy.formula import DCNF
-from dsharpy.util import process_code_with_cbmc
+from dsharpy.util import process_code_with_cbmc, CBMCOptions
 from tests.util import assert_deps_independent
 
 
@@ -23,7 +23,7 @@ void main()
   char __out = b;
   assert(b + 1 != 0);
 }
-""", preprocess=True)
+""")
     deps = DCNF.load_string(string).deps
     assert_deps_independent(deps)
     assert len(deps) == 1
@@ -43,7 +43,7 @@ void main()
   char __out = res;
   assert(num != 0);
 }
-""", preprocess=True, unwind=3)
+""")
     dcnf = DCNF.load_string(string)
     assert len(dcnf.deps) == 1
     assert_deps_independent(dcnf.deps)
@@ -64,7 +64,7 @@ void main()
   char bla = num;
   assert(num != 0);
 }
-""", preprocess=True, unwind=3)
+""")
     dcnf = DCNF.load_string(string)
     assert len(dcnf.deps) == 1
     assert_deps_independent(dcnf.deps)
@@ -81,7 +81,7 @@ void main()
   fib(non_det_bool()); 
   END;
 }
-""", rec=0)
+""", CBMCOptions(rec=0))
     dcnf = DCNF.load_string(string)
     assert len(dcnf.deps) == 1
     dep = dcnf.deps[0]
