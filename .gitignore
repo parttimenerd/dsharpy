@@ -7,3 +7,4 @@
 **/*.cnf.*log
 **/*.cnf.*out
 **/*.cnf.*fold
+venv

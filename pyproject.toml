@@ -3,6 +3,8 @@ name = "dsharpy"
 version = "0.1.0"
 description = "A #SAT solver with dependencies"
 authors = ["Johannes Bechberger <johannes.bechberger@kit.edu>"]
+packages = [{ include = "dsharpy" }]
+include = [{ path = "dsharpy/**/*.so", format = "wheel" }]
 
 [tool.poetry.dependencies]
 python = "^3.8"
@@ -12,6 +14,7 @@ prettyprinter = "^0.18.0"
 scipy = "^1.5.4"
 pytest-clarity = "^0.3.0-alpha.0"
 pytest-check = "^1.0.1"
+Cython = "^0.29.21"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.0"
@@ -19,8 +22,15 @@ pytest-clarity = "0.3.0a"
 pytest-check = "^1.0"
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = [
+    "poetry-core>=1.0.0",
+    "Cython~=0.29.21",
+]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.build]
+generate-setup-file = false
+script = "build.py"
 
 [tool.poetry.scripts]
 dsharpy = "dsharpy.counter:cli"
