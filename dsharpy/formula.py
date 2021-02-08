@@ -2,7 +2,7 @@
 This module is based on the pysat.formula module to provide a simple interface to CNF formulas with
 D#SAT specific comments.
 """
-import copy
+from copy import copy
 import math
 import re
 import subprocess
@@ -13,10 +13,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, FrozenSet
+from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, FrozenSet, Dict
 
 from pysat.formula import CNF
 
+from dsharpy.data_structures import UnionFind
 from dsharpy.util import binary_path, empty, random_bool, random_split, ints_with_even_bit_count
 
 
@@ -61,6 +62,9 @@ class Dep:
 
     def max_var(self) -> int:
         return max(abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs)
+
+    def vars(self) -> List[int]:
+        return [abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs]
 
 
 Deps = List[Dep]
@@ -164,21 +168,21 @@ class DCNF(CNF):
         """ Copy the CNF """
         cnf = DCNF()
         cnf.nv = self.nv
-        cnf.clauses = copy.deepcopy(self.clauses)
-        cnf.comments = copy.deepcopy(self.comments)
-        cnf.ind = copy.deepcopy(self.ind)
-        cnf.deps = copy.deepcopy(self.deps)
-        cnf.independents = copy.deepcopy(self.independents)
+        cnf.clauses = deepcopy(self.clauses)
+        cnf.comments = deepcopy(self.comments)
+        cnf.ind = deepcopy(self.ind)
+        cnf.deps = deepcopy(self.deps)
+        cnf.independents = deepcopy(self.independents)
         return cnf
 
     def shallow_copy(self) -> 'DCNF':
         cnf = DCNF()
         cnf.nv = self.nv
-        cnf.clauses = copy.copy(self.clauses)
-        cnf.comments = copy.copy(self.comments)
-        cnf.ind = copy.copy(self.ind)
-        cnf.deps = copy.copy(self.deps)
-        cnf.independents = copy.copy(self.independents)
+        cnf.clauses = copy(self.clauses)
+        cnf.comments = copy(self.comments)
+        cnf.ind = copy(self.ind)
+        cnf.deps = copy(self.deps)
+        cnf.independents = copy(self.independents)
         return cnf
 
     def really_shallow_copy(self) -> 'DCNF':
@@ -411,6 +415,69 @@ class CNFGraph:
         if var < len(self.var_to_clauses):
             return self.var_to_clauses[var]
         return []
+
+
+Relations = Tuple[Dict[int, List[int]], List[List[int]]]
+
+
+def init_union_find_from_cnf(cnf: CNF, eq_classes: List[List[int]] = None) -> UnionFind:
+    uf = UnionFind(cnf.nv + 1, 1)
+    for eq_class in eq_classes or []:
+        uf.union_many(eq_class)
+    if cnf.clauses:
+        uf.union_many(cnf.clauses)
+    if isinstance(cnf, DCNF):
+        for dep in cnf.deps:
+            uf.union_many(dep.vars())
+    return uf
+
+
+def find_related(cnf: CNF, start: Set[int], end: Set[int],
+                 eq_classes: List[List[int]] = None) -> Relations:
+    """
+    Idea: A cnf formula can be seen as a collection of equivalence
+    generating operations:
+
+    Each clause tells us that its variables are in the same equivelance
+    class (that they affect each other, in which way isn't important here,
+    as this is a rough over approximation).
+
+    The role of deps: A dep $as ~cs~> bs$ tells us that
+    as and bs and cs are related.
+
+    The aim is to find connections between variables, used
+    to implement different DepGenerationPolicies
+
+    This function computes the $end$ variables that are related
+    to each of the $start$ variables with support for dep statements
+    and the equivalence sets of starts
+    """
+    return init_union_find_from_cnf(cnf, eq_classes).find_related(start, end)
+
+
+class IncrementalRelations:
+    """ Built relations without deps and compute relations with different deps """
+
+    def __init__(self, uf: UnionFind, base_eq_classes: List[List[int]], start: Set[int], end: Set[int]):
+        self.uf = uf
+        self.base_eq_classes = base_eq_classes
+        self.start = start
+        self.end = end
+
+    def compute(self, misc_deps: Deps) -> Relations:
+        """ Assumes that introduced constraints can be ignored and
+        add the new deps. Does not alter this instance.
+        """
+        new_uf = copy(self.uf)
+        for dep in misc_deps:
+            new_uf.union_many(dep.vars())
+        return new_uf.find_related(self.start, self.end)
+
+    @classmethod
+    def create(cls, cnf: CNF, start: Set[int], end: Set[int], eq_classes: List[List[int]] = None) \
+            -> "IncrementalRelations":
+        uf = init_union_find_from_cnf(cnf, eq_classes)
+        return IncrementalRelations(uf, uf.find_eq_classes(), start, end)
 
 
 def trim_dcnf(cnf: DCNF, anchors: Iterable[int] = None) -> DCNF:

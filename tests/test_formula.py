@@ -2,7 +2,9 @@ import math
 
 import pytest
 
-from dsharpy.formula import RangeSplitXORGenerator, FullyRandomXORGenerator, XOR, XORs, blast_xor
+from dsharpy.formula import RangeSplitXORGenerator, FullyRandomXORGenerator, XOR, XORs, blast_xor, \
+    IncrementalRelations, Dep
+from pysat.formula import CNF
 
 
 def test_xor_reduce_variability_by_one_ranged():
@@ -55,3 +57,14 @@ def test_blast_xor_count(count: int):
 def test_range_split_with_more_variability_than_variables():
     xor = FullyRandomXORGenerator().generate([1, 2], 5)
     assert xor == XORs([])
+
+
+def test_incremental_relations():
+
+    inc = IncrementalRelations.create(CNF(from_clauses=[
+        [1, 2],
+        [2, 3],
+        [5, 6]
+    ]), [1], [6])
+    rels, eqs = inc.compute([Dep({3}, {5})])
+    assert rels[1] == [6]
