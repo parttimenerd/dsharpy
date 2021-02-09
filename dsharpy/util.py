@@ -7,6 +7,7 @@ import random
 import secrets
 import subprocess
 import tempfile
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from io import IOBase
@@ -14,7 +15,7 @@ from io import IOBase
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Mapping, Callable
+from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Mapping, Callable, Optional, Deque
 
 
 def binary_path(program: str) -> Path:
@@ -121,7 +122,7 @@ def pprint(x: Any):
 @functools.lru_cache()
 def modified_cbmc_path() -> Path:
     dsharpy_base = Path(__file__).parent.parent
-    if (dsharpy_base.parent / "cbmc").exists():  # were clearly in my current debug setup
+    if (dsharpy_base.parent / "cbmc").exists():  # we're clearly in my current debug setup
         return dsharpy_base.parent / "cbmc/cmake-build-debug/bin/cbmc"
     return next(f for f in (dsharpy_base / "util" / "cbmc" / "build").rglob("cbmc") if f.is_file()).absolute()
 
@@ -141,12 +142,50 @@ def has_modified_cbmc() -> bool:
     except subprocess.CalledProcessError:
         return False
 
+
+class DepGenerationPolicy(Enum):
+    """
+    Policy for generating deps, important for multiple returns/outputs, else all are equivalent to SINGLE_DEP
+    """
+
+    SINGLE_DEP = "single_dep"
+    """
+    A single dep for all connections of loop iteration or function, ignores
+    all return variables that are not related to a param
+
+    Advantages:
+    - simple
+    """
+
+    FULL_VARS = "full"
+    """
+    A dep per (equivalence class of parameters x related returns) (same for loops)
+
+    Advantages:
+    - over approximates to the utmost extent
+    """
+
+    MULTIPLE_DEP_VARS = "multiple_dep"
+    """
+    A dep per (equivalence class of parameters, related returns) (same for loops)
+    """
+
+    FULL_BITS = "full_bits"
+    MULTIPLE_DEP_BITS = "multiple_dep_bits"
+
+    def on_var_basis(self) -> bool:
+        """ Based on whole variables (not just single SAT variables)"""
+        return self == self.SINGLE_DEP or self == self.FULL_VARS or self == self.MULTIPLE_DEP_VARS
+
+
 @dataclass
 class CBMCOptions:
     unwind: int = 3
-    rec: int = None
-    abstract_rec: int = None
-    """ Use abstract with depth """
+    rec: Optional[int] = None
+    """ None: use unwind """
+    abstract_rec: Optional[int] = None
+    """ Use abstract with depth, None: don't use abstract recursion (and the expensive post processing) """
+    dep_gen_policy: DepGenerationPolicy = DepGenerationPolicy.FULL_VARS
     preprocess: bool = True
     verbose: bool = False
     process_graph: Callable[["convert.Graph"], None] = field(default_factory=lambda: (lambda g: None))
@@ -227,7 +266,8 @@ def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None,
         print(cbmc_out)
         if isinstance(c_file, Path):
             print(c_file.read_text())
-    graph = convert.Graph.parse_graph(cbmc_out.split("\n"), "__out", use_latest_ind_var=True)
+    graph = convert.Graph.parse_graph(cbmc_out.split("\n"), options.dep_gen_policy,
+                                      "__out", use_latest_ind_var=True)
     options.process_graph(graph)
     graph.cnf.to_fp(out)
 
@@ -309,3 +349,17 @@ V = TypeVar("V")
 
 def single(d: Mapping[K, V]) -> V:
     return next(iter(d.values()))
+
+
+def bfs(start: Iterable[T], visit: Callable[[T], Optional[Iterable[T]]]):
+    visited: Set[T] = set()
+    deq: Deque[T] = deque()
+    deq.extend(start)
+    while len(deq) > 0:
+        top = deq.pop()
+        if top in visited:
+            continue
+        visited.add(top)
+        top_v = visit(top)
+        if top_v:
+            deq.extendleft(top_v)

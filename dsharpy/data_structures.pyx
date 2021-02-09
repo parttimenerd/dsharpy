@@ -1,9 +1,9 @@
 # based on https://github.com/eldridgejm/unionfind/blob/master/unionfind.pyx
 
 cimport cython
-from libc.stdlib cimport malloc, free
 from libcpp.vector cimport vector
 from libcpp.unordered_map cimport unordered_map
+from libcpp cimport bool
 
 cdef class UnionFind:
     """
@@ -40,29 +40,46 @@ cdef class UnionFind:
             self.rank[i] = 1
         self._n_sets = n_points - self.start
 
-    def find(self, int i) -> int:
+    def valid_index(self, int i) -> bool:
+        return self.start <= abs(i) < self.n_points
+
+    def find(self, int i, bool ignore_invalid = False) -> int:
         """ Find the equivalence class for index i """
+        if not self.valid_index(i):
+            if ignore_invalid:
+                return -1
+            else:
+                raise ValueError("Out of bounds index.")
         if i < 0:
-            return self.find(-i)
-        if (i < self.start) or (i > self.n_points):
-            raise ValueError("Out of bounds index.")
+            return self._find(-i)
         return self._find(i)
 
-    def union(self, int i, int j):
+    def union(self, int i, int j) -> int:
         return self.union_many([i, j])
 
-    def union_many(self, list multiple) -> int:
-        """ Build the union of multiple elements (accepts list [of lists, …] of ints) """
+    def union_many(self, list multiple, bool ignore_invalid = False) -> int:
+        """
+        Build the union of multiple elements (accepts list [of lists, …] of ints), -1 if all invalid
+        """
 
         assert len(multiple) > 0
 
-        cdef int root_i, root_j, j
-        root_i = self.union_many(multiple[0]) if isinstance(multiple[0], list) else self.find(multiple[0])
+        cdef int root_i, root_j, j, i
+        root_i = -1
+        i = 0
+        while root_i == -1 and i < len(multiple):
+            root_i = self.union_many(multiple[i], ignore_invalid) \
+                if isinstance(multiple[i], list) \
+                else self.find(multiple[i], ignore_invalid)
+            i += 1
 
-        for j in range(1, len(multiple)):
+        for j in range(i, len(multiple)):
 
-            root_j = self.union_many(multiple[j]) if isinstance(multiple[j], list) else self.find(multiple[j])
-
+            root_j = self.union_many(multiple[j], ignore_invalid) \
+                if isinstance(multiple[j], list) \
+                else self.find(multiple[j], ignore_invalid)
+            if root_j == -1:
+                continue
             if root_i != root_j:
                 self._n_sets -= 1
                 if self.rank[root_i] < self.rank[root_j]:
@@ -88,7 +105,7 @@ cdef class UnionFind:
 
         cdef int start
         for start in starts:
-            root = self.find(start)
+            root = self.find(start, True)
             if indices.find(root) == indices.end():
                 indices[root] = start_eqs.size()
                 start_eqs.push_back(vector[int]())
@@ -96,7 +113,7 @@ cdef class UnionFind:
 
         for eq in start_eqs:
             root = self._find(eq[0])
-            end = [i for i in ends if self._find(i) == root]
+            end = [i for i in ends if self.find(i, True) == root]
             for s in eq:
                 d[s] = end
         return d, start_eqs
@@ -131,3 +148,11 @@ cdef class UnionFind:
     property n_sets:
         def __get__(self):
             return self._n_sets
+
+    property start:
+        def __get__(self):
+            return self.start
+
+    property n_points:
+        def __get__(self):
+            return self.n_points

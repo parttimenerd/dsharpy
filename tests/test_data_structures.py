@@ -1,4 +1,3 @@
-from array import array
 from copy import copy
 
 from dsharpy.data_structures import UnionFind
@@ -20,7 +19,7 @@ def test_union_find():
     for i in range(5, 10):
         assert forest.find(1) != forest.find(i)
 
-    forest.union_many([[5, 6], 7, [8, 9]])
+    forest.union_many([[5, 6], 7, [8, -9]])
     forest.n_sets == 3
     assert len(forest.find_eq_classes()) == 3
 

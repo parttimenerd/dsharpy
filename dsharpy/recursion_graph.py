@@ -10,9 +10,10 @@ from abc import abstractmethod, ABC
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import List, Mapping, Iterator, Dict, Set, MutableMapping, Optional, Callable, Deque, Iterable, FrozenSet, \
-    Tuple, Union
+    Tuple, Union, TypeVar, Generic
 
-from dsharpy.formula import Deps, Dep, count_sat, DCNF
+from dsharpy.formula import Deps, Dep, count_sat, DCNF, IncrementalRelations
+from dsharpy.util import DepGenerationPolicy
 
 Clause = List[int]
 Clauses = List[Clause]
@@ -70,7 +71,8 @@ def negate(var: Variable) -> Variable:
 
 
 def transpose_single(var: int, mapping: IntToVariableMap) -> Variable:
-    if var < 0:
+    assert var in mapping or -var in mapping
+    if var not in mapping:
         return negate(transpose_single(-var, mapping))
     return mapping[var]
 
@@ -142,26 +144,36 @@ class NameMapping(Mapping[str, Variables]):
     def get_vars(self) -> Set[int]:
         return {abs(v) for v in self.combined_clause()}
 
+    def values(self) -> Iterable[Variables]:
+        return self.base.values()
 
-def transpose_dep(dep: Dep, mapping: IntToVariableMap) -> Optional[Dep]:
+
+def transpose_dep(dep: Dep, param_mapping: IntToVariableMap, ret_mapping: IntToVariableMap = None,
+                  constraint_mapping: IntToVariableMap = None) -> Optional[Dep]:
     """ Transpose the dep, returns False if the dep is obsolete (a constraint is False) """
 
-    def transpose_set(s: FrozenSet[int]) -> FrozenSet[int]:
+    def transpose_set(s: FrozenSet[int], mapping: IntToVariableMap) -> FrozenSet[int]:
         return frozenset(abs(new_v) for v in s if not is_constant(new_v := transpose_single(v, mapping)))
 
+    ret_mapping = ret_mapping or param_mapping
+    constraint_mapping = constraint_mapping or param_mapping
     new_constraint = []
     for v in dep.constraint:
-        new_v = transpose_single(v, mapping)
+        new_v = transpose_single(v, constraint_mapping)
         if new_v is False:
             return None
         if new_v is not True:
             new_constraint.append(new_v)
-    return Dep(transpose_set(dep.param), transpose_set(dep.ret), frozenset(new_constraint), dep.max_variability)
+    return Dep(transpose_set(dep.param, param_mapping), transpose_set(dep.ret, ret_mapping), frozenset(new_constraint),
+               dep.max_variability)
 
 
-def transpose_deps(deps: Deps, mapping: VariableMap) -> Deps:
+def transpose_deps(deps: Deps, param_mapping: IntToVariableMap,
+                   ret_mapping: IntToVariableMap = None,
+                   constraint_mapping: IntToVariableMap = None) -> Deps:
     """ Removes obsolete deps """
-    return [new_dep for dep in deps if (new_dep := transpose_dep(dep, mapping)) and not new_dep.empty()]
+    return [new_dep for dep in deps
+            if (new_dep := transpose_dep(dep, param_mapping, ret_mapping, constraint_mapping)) and not new_dep.empty()]
 
 
 VariabilityEstimator = Callable[[DCNF], float]
@@ -241,8 +253,8 @@ class ApplicableCNF:
 
 class DefaultApplicableCNF(ApplicableCNF):
 
-    def __init__(self):
-        super(DefaultApplicableCNF, self).__init__(NameMapping(), NameMapping(), [], [])
+    def __init__(self, input: NameMapping, output: NameMapping):
+        super(DefaultApplicableCNF, self).__init__(input, output, [], [])
 
     def add_deps(self, deps: Deps) -> "ApplicableCNF":
         return self
@@ -266,8 +278,6 @@ class NodeStore(Mapping[str, "RecursionNode"]):
     base: Dict[str, "RecursionNode"] = field(default_factory=dict)
 
     def __getitem__(self, name: str) -> "RecursionNode":
-        if name not in self.base:
-            self.base[name] = DefaultRecursionNode(name)
         return self.base[name]
 
     def __setitem__(self, name: str, node: "RecursionNode"):
@@ -288,10 +298,17 @@ class RecursionChild:
     input: NameMapping
     output: NameMapping
     constraint: Set[int]
+    _cached: Optional["RecursionNode"] = None
 
     @property
     def node(self) -> "RecursionNode":
-        return self.node_store[self.node_id]
+        if not self._cached:
+            if self.node_id in self.node_store:
+                self._cached = self.node_store[self.node_id]
+            else:
+                self._cached = RecursionNode(f"{self.node_id} {self.id}", DefaultApplicableCNF(self.input, self.output),
+                                             [])
+        return self._cached
 
     def __hash__(self):
         return self.id
@@ -327,28 +344,28 @@ class RecursionNode:
         return (child.node for child in self.children)
 
     def to_applicable(self,
-                      child_to_dep: Callable[[RecursionChild, int], Union[Dep, Tuple[Dep, Clauses]]] =
-                      lambda c, n: Dep(frozenset(c.input.combined_clause()), frozenset(c.output.combined_clause()),
-                                       frozenset(c.constraint))) \
+                      child_to_dep: Callable[[RecursionChild, int], Union[Deps, Tuple[Deps, Clauses]]] =
+                      lambda c, n: [Dep(frozenset(c.input.combined_clause()), frozenset(c.output.combined_clause()),
+                                       frozenset(c.constraint))]) \
             -> ApplicableCNF:
         """ Create an applicable cnf that includes all deps from children """
         new_id = self.acnf.max_var() + 1
-        deps = []
+        all_deps = []
         all_clauses = []
         for child in self.children:
-            dep_or_tuple = child_to_dep(child, new_id)
-            if isinstance(dep_or_tuple, Dep):
-                dep, clauses = dep_or_tuple, []
+            deps_or_tuple = child_to_dep(child, new_id)
+            if isinstance(deps_or_tuple, Dep):
+                deps, clauses = deps_or_tuple, []
             else:
-                dep, clauses = dep_or_tuple
-            new_id = max(new_id, dep.max_var(),
-                         max(max(clause) if clause else 0 for clause in clauses) if clauses else 0) + 1
-            deps.append(dep)
+                deps, clauses = deps_or_tuple
+            new_id = max(new_id, max((dep.max_var() for dep in deps), default=0),
+                         max(max(clause, default=0) for clause in clauses) if clauses else 0) + 1
+            all_deps.extend(deps)
             all_clauses.extend(clauses)
         acnf = self.acnf
         if all_clauses:
             acnf = self.acnf.add_clauses(all_clauses)
-        return acnf.add_deps(deps)
+        return acnf.add_deps(all_deps)
 
 
 class DefaultRecursionNode(RecursionNode):
@@ -419,38 +436,115 @@ def walk_recursion_nodes(start_nodes: List[RecursionNode], children: Callable[[R
             add_all(parents[node])
 
 
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class EqClasses(Generic[T]):
+    partitions: Tuple[Tuple[T]]
+    """ input partitions"""
+    base: Dict[FrozenSet[T], FrozenSet[T]]
+    on_var_level: bool
+    """ true → base is based on strings """
+
+    @classmethod
+    def create_default(cls, node: RecursionNode, on_var_level: bool) -> "Union[EqClasses[str],EqClasses[int]]":
+        partition = node.acnf.input.keys() if on_var_level else node.acnf.input.combined_clause()
+        output = node.acnf.output.keys() if on_var_level else node.acnf.output.combined_clause()
+        return EqClasses((tuple(partition),), {frozenset(partition): frozenset(output)}, on_var_level)
+
+    def __eq__(self, other: "EqClasses[T]") -> bool:
+        assert self.on_var_level == other.on_var_level
+        return self.partitions == other.partitions and self.base == other.base
+
+    def __hash__(self) -> int:
+        return hash(self.partitions)
+
+
 @dataclass
 class RecursionProcessingResult:
+    dep_policy: DepGenerationPolicy
     max_variability: Dict[RecursionNode, float] = field(default_factory=lambda: defaultdict(lambda: float("inf")))
+    eq_classes: Dict[RecursionNode, EqClasses[int]] = field(default_factory=dict)
     constraints: Dict[RecursionNode, Clauses] = field(default_factory=lambda: defaultdict(list))
 
-    def to_dep(self, child: RecursionChild, start_id: int) -> Tuple[Dep, Clauses]:
+    def get_eq_classes(self, node: RecursionNode) -> Union[EqClasses[int], EqClasses[str]]:
+        if node not in self.eq_classes:
+            self.eq_classes[node] = EqClasses.create_default(node, on_var_level=False)
+        return self.eq_classes[node]
+
+    def to_meta_dep(self, node: RecursionNode) -> Callable[[RecursionChild], Deps]:
+        """
+        Creates a function that creates deps for a given child.
+
+        Could be cached.
+        """
+        deps = []
+        for inputs, outputs in self.get_eq_classes(node).base.items():
+            if not outputs:
+                continue
+            tinputs = frozenset(inputs)
+            if self.dep_policy == DepGenerationPolicy.FULL_VARS or self.dep_policy == DepGenerationPolicy.FULL_BITS:
+                output_classes: List[FrozenSet[int]] = []
+                if self.dep_policy == DepGenerationPolicy.FULL_VARS:
+                    output_classes = [frozenset(abs(o) for o in out_vars if not is_constant(o))
+                                      for out_vars in node.acnf.output.values()
+                                      if any(abs(o) in outputs for o in out_vars if not is_constant(o))]
+                else:
+                    output_classes = [frozenset([output]) for output in outputs]
+                for output in output_classes:
+                    deps.append(Dep(tinputs, output, frozenset(), self.max_variability[node]))
+            else:
+                deps.append(Dep(tinputs, frozenset(outputs), frozenset(), self.max_variability[node]))
+
+        def create_m(node: RecursionNode, child: RecursionChild) -> IntToVariableMap:
+            m: IntToVariableMap = {}
+            m.update()
+            m.update()
+            return m
+
+        def creator(child: RecursionChild) -> Deps:
+            tds = transpose_deps(deps, node.acnf.input.create_mapping(child.input),
+                                 node.acnf.output.create_mapping(child.output))
+            constraint = frozenset(child.constraint)
+            return [Dep(td.param, td.ret, constraint, td.max_variability) for td in tds]
+
+        return creator
+
+    def to_dep(self, child: RecursionChild, start_id: int) -> Tuple[List[Dep], Clauses]:
         """
         Creates a dep with constraint for a given recursion child.
 
         :param start_id: start id for new variables for created clauses
         :return: dep and constraint clauses for the passed recursion child
         """
-        dep = Dep(frozenset(child.input.combined_clause()),
-                  frozenset(child.output.combined_clause()),
-                  frozenset(child.constraint), self.max_variability[child.node])
-        misc_cons = self.constraints[child.node]
+        node = child.node
+        creator = self.to_meta_dep(node)
+        deps = creator(child)
+        misc_cons = self.constraints[node]
         if misc_cons:
-            assert start_id > dep.max_var()
             new_clauses = transpose_clauses(misc_cons, create_mapping(get_vars(misc_cons), start_id + 1))
             new_clauses_impl = [[-start_id] + clause for clause in new_clauses]
-            return Dep(dep.param, dep.ret, frozenset({start_id, *dep.constraint}),
-                       dep.max_variability), new_clauses_impl
-        return dep, []
+            return [Dep(dep.param, dep.ret, frozenset({start_id, *dep.constraint}),
+                        dep.max_variability) for dep in deps], new_clauses_impl
+        return deps, []
 
     def to_full_applicable(self, node: RecursionNode) -> ApplicableCNF:
         """ Maps the recursion node to a full applicable CNF with all clauses and deps for every child """
         return node.to_applicable(self.to_dep)
 
-    def update(self, node: RecursionNode, max_variability: float) -> bool:
-        cur = self.max_variability[node]
-        self.max_variability[node] = max_variability
-        return cur != max_variability
+    def update(self, node: RecursionNode, max_variability: float = None, eq_classes: EqClasses = None) -> bool:
+        changed = False
+        if max_variability is not None:
+            cur = self.max_variability[node]
+            self.max_variability[node] = max_variability
+            changed |= cur != max_variability
+        if eq_classes is not None:
+            cur = self.get_eq_classes(node)
+            assert isinstance(eq_classes.base, dict)
+            self.eq_classes[node] = eq_classes
+            changed |= cur != eq_classes
+        return changed
 
 
 class RecursionProcessor(ABC):
@@ -465,49 +559,67 @@ class MaxVariabilityRecursionProcessor(RecursionProcessor):
 
     def __init__(self, start_nodes: List[RecursionNode],
                  variability_estimator: VariabilityEstimator,
-                 state: RecursionProcessingResult = None):
+                 state: RecursionProcessingResult):
         self.start_nodes = start_nodes
         self.variability_estimator = variability_estimator
-        self.state: RecursionProcessingResult = state or RecursionProcessingResult()
+        self.state: RecursionProcessingResult = state
 
     def run(self) -> RecursionProcessingResult:
         walk_recursion_nodes(self.start_nodes, RecursionNode.child_nodes, self._process)
         return self.state
 
     def _process(self, node: RecursionNode) -> bool:
-        return self.state.update(node, self._calculate_max_variability(node))
+        return self.state.update(node, max_variability=self._calculate_max_variability(node))
 
     def _calculate_max_variability(self, node: RecursionNode) -> float:
         return self.state.to_full_applicable(node).count_sat(self.variability_estimator)
 
 
-class BitGraph:
-    # todo: implement
-
-    def compute(self, bit_graph_for_child: Callable[[str], "BitGraph"]):
-        pass
-
-
-class MaxVariabilityBitGraphRecursionProcessor(RecursionProcessor):
+class DepEqClassesRecursionProcessor(RecursionProcessor):
     """
-    Same as MaxVariabilityRecursionProcessor, but uses bit graphs instead of a D#SAT counter.
-    This has multiple advantages:
-        - probably faster (but with larger memory requirements
-        - surely sound (which the other isn't)
-        - bit graphs can be reused as different model counter
-    Disadvantages:
-        - more work
-        - less precision
+    Estimates the input equivalence classes used for the different DepGenerationPolicies
     """
 
     def __init__(self, start_nodes: List[RecursionNode],
-                 state: RecursionProcessingResult = None):
+                 state: RecursionProcessingResult):
         self.start_nodes = start_nodes
-        self.state: RecursionProcessingResult = state or RecursionProcessingResult()
-        self.bit_graphs: Dict[str, BitGraph] = {}  # todo: create default bit graphs
+        self.state: RecursionProcessingResult = state
+        self.incs: Dict[RecursionNode, IncrementalRelations] = {}
+        self.nvs: Dict[RecursionNode, int] = {}
 
     def run(self) -> RecursionProcessingResult:
-        raise NotImplementedError()
+        walk_recursion_nodes(self.start_nodes, RecursionNode.child_nodes, self._process)
+        return self.state
+
+    def _process(self, node: RecursionNode) -> bool:
+        return self.state.update(node, eq_classes=self._compute_eq_classes(node))
+
+    def _compute_eq_classes(self, node: RecursionNode) -> EqClasses:
+        inc, nv = self._get_inc(node)
+        start_id = nv + 1
+        deps = []
+        for child in node.children:
+            deps_, clauses = self.state.to_dep(child, start_id)
+            start_id = max((dep.max_var() for dep in deps_), default=1) + 1
+            deps.extend(deps_)
+        rels, eqs = inc.compute(deps)
+        return EqClasses(tuple(map(tuple, eqs)), {frozenset(eq): rels[eq[0]] for eq in eqs}, on_var_level=False)
+
+    def _get_inc(self, node: RecursionNode) -> IncrementalRelations:
+        if node not in self.incs:
+            cnf = node.acnf.to_cnf()
+            start: List[int] = []
+            end: List[int] = []
+            misc_eqs: List[List[int]] = []
+            pol = self.state.dep_policy
+            start = node.acnf.input.combined_clause()
+            end = node.acnf.output.combined_clause()
+            if pol.on_var_basis():
+                misc_eqs.extend(list(node.acnf.input.values()))
+                misc_eqs.extend(list(node.acnf.output.values()))
+            self.incs[node] = IncrementalRelations.create(cnf, start, end, misc_eqs)
+            self.nvs[node] = cnf.nv
+        return self.incs[node], self.nvs[node]
 
 
 class ConstraintRecursionProcessor(RecursionProcessor):

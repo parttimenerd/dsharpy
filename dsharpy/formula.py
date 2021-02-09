@@ -2,7 +2,6 @@
 This module is based on the pysat.formula module to provide a simple interface to CNF formulas with
 D#SAT specific comments.
 """
-from copy import copy
 import math
 import re
 import subprocess
@@ -10,6 +9,7 @@ import sys
 import tempfile
 from abc import abstractmethod
 from collections import deque
+from copy import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -58,7 +58,7 @@ class Dep:
                    float(val) if (val := max_dep_part.strip().split(" ")[0]) != "0" else None)
 
     def __str__(self) -> str:
-        return f"{self.param} ~{self.constraint}~{self.max_variability or 'inf'}~> {self.ret}"
+        return f"{set(self.param)} ~{set(self.constraint)}~{self.max_variability or 'inf'}~> {set(self.ret)}"
 
     def max_var(self) -> int:
         return max(abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs)
@@ -421,14 +421,14 @@ Relations = Tuple[Dict[int, List[int]], List[List[int]]]
 
 
 def init_union_find_from_cnf(cnf: CNF, eq_classes: List[List[int]] = None) -> UnionFind:
-    uf = UnionFind(cnf.nv + 1, 1)
+    uf = UnionFind(max(cnf.nv, max(map(max, eq_classes or []), default=0)) + 1, 1)
     for eq_class in eq_classes or []:
-        uf.union_many(eq_class)
+        uf.union_many(eq_class, True)
     if cnf.clauses:
-        uf.union_many(cnf.clauses)
+        uf.union_many(cnf.clauses, True)
     if isinstance(cnf, DCNF):
         for dep in cnf.deps:
-            uf.union_many(dep.vars())
+            uf.union_many(dep.vars(), True)
     return uf
 
 
@@ -470,7 +470,7 @@ class IncrementalRelations:
         """
         new_uf = copy(self.uf)
         for dep in misc_deps:
-            new_uf.union_many(dep.vars())
+            new_uf.union_many(dep.vars(), True)
         return new_uf.find_related(self.start, self.end)
 
     @classmethod

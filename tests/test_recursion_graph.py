@@ -4,7 +4,7 @@ from pytest_check import check
 from dsharpy.formula import Dep
 from dsharpy.recursion_graph import ApplicableCNF, NameMapping, Variable, parse_variable, transpose_clauses, \
     transpose_dep, RecursionNode, RecursionChild, RecursionProcessingResult
-from dsharpy.util import single
+from dsharpy.util import single, DepGenerationPolicy
 
 
 @pytest.mark.parametrize("string,expected",
@@ -84,16 +84,18 @@ def test_abstract_rec_to_applicable():
                                  base={'fib(char)#return_value': [158, 159]}),
                                              constraint={2})])
     node_store[rec_node.id] = rec_node
-    proc_res = RecursionProcessingResult(max_variability={rec_node: 9})
+    proc_res = RecursionProcessingResult(max_variability={rec_node: 9}, dep_policy=DepGenerationPolicy.FULL_VARS)
     rec_child = RecursionChild(node_store={'fib(char)': rec_node}, id=1, node_id='fib(char)',
                                input=NameMapping(base={'fib(char)::num': [6, 7]}),
                                output=NameMapping(
                                    base={'fib(char)#return_value': [174, 175]}),
                                constraint={1})
 
-    dep, clauses = proc_res.to_dep(rec_child, 1000)
+    deps, clauses = proc_res.to_dep(rec_child, 1000)
     # no constraints are specified
     assert not clauses
+
+    dep = deps[0]
 
     # param and ret have to be equivalent
     assert dep.param == frozenset(single(rec_child.input))

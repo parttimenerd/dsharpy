@@ -1,17 +1,17 @@
 """
 Convert the --dimacs output of the modified CBMC
 """
-from collections import deque
 from dataclasses import dataclass, field
 from io import IOBase
-from typing import List, Set, Callable, Iterable, Optional, TypeVar, Dict, Tuple, Deque, Union, FrozenSet
+from typing import List, Set, Iterable, Optional, TypeVar, Dict, Tuple, Union, FrozenSet
 
 import click
 
 from dsharpy.formula import DCNF, Dep
 from dsharpy.recursion_graph import NameMapping, RecursionNode, RecursionProcessingResult, \
     MaxVariabilityRecursionProcessor, \
-    RecursionChild, ApplicableCNF, Clause, parse_variable, NodeStore
+    RecursionChild, ApplicableCNF, Clause, parse_variable, NodeStore, DepEqClassesRecursionProcessor
+from dsharpy.util import bfs, DepGenerationPolicy
 
 Origin = Union[Dep, RecursionChild, int]
 
@@ -35,20 +35,6 @@ class Node:
 
 
 T = TypeVar("T")
-
-
-def bfs(start: Iterable[T], visit: Callable[[T], Optional[Iterable[T]]]):
-    visited: Set[T] = set()
-    deq: Deque[T] = deque()
-    deq.extend(start)
-    while len(deq) > 0:
-        top = deq.pop()
-        if top in visited:
-            continue
-        visited.add(top)
-        top_v = visit(top)
-        if top_v:
-            deq.extendleft(top_v)
 
 
 class VarNode:
@@ -100,6 +86,10 @@ def var_nodes_to_ints(var_nodes: Iterable[VarNode]) -> Iterable[int]:
     return list(v.sat_var for o in var_nodes for v in o.sat_vars if v.sat_var)
 
 
+def var_nodes_to_abs_set(var_nodes: Iterable[VarNode]) -> FrozenSet[int]:
+    return frozenset(abs(v.sat_var) for o in var_nodes for v in o.sat_vars if v.sat_var)
+
+
 @dataclass
 class Aborted:
     representative: "Aborted"
@@ -135,33 +125,56 @@ class LoopIter(Aborted):
         if isinstance(self.last_iter_guard, list):
             self.last_iter_guard = self.last_iter_guard[0] if self.last_iter_guard else None
 
-    def input_that_outputs_might_depend_on(self) -> Set[VarNode]:
-        meta_node = VarNode("meta", [v for o in self.last_iter_output for v in o.sat_vars], [])
-        meta_node.var_deps.update(set(v for o in self.last_iter_output for v in o.var_deps))
-        return meta_node.compute_others(self.input, self.last_iter_output)
+    def input_that_outputs_might_depend_on(self, output: List[VarNode] = None) -> Set[VarNode]:
+        output = output or self.last_iter_output
+        meta_node = VarNode("meta", [v for o in output for v in o.sat_vars], [])
+        meta_node.var_deps.update(set(v for o in output for v in o.var_deps))
+        return meta_node.compute_others(self.input, output)
 
-    def compute_dependency(self) -> Dep:
-        """ requires that set_var_deps has been called on all VarNodes before """
-        return Dep(frozenset(var_nodes_to_ints(self.input_that_outputs_might_depend_on())),
-                   frozenset(var_nodes_to_ints(self.output)), self.guard_conjunction())
+    def compute_dependencies(self, dep_policy: DepGenerationPolicy) -> List[Dep]:
+        """
+        requires that set_var_deps has been called on all VarNodes before
+
+        todo: does not support all DepGenerationPolicies
+        """
+        guard = self.guard_conjunction()
+        if dep_policy == DepGenerationPolicy.SINGLE_DEP:
+            return [Dep(frozenset(var_nodes_to_ints(self.input_that_outputs_might_depend_on())),
+                        frozenset(var_nodes_to_ints(self.output)), guard)]
+        else:
+            # find equivalence classes
+
+            if dep_policy == DepGenerationPolicy.SINGLE_DEP:
+                outss = []
+                inss = []
+                for out in self.last_iter_output:
+                    ins = frozenset(self.input_that_outputs_might_depend_on([out]))
+                    if ins:
+                        inss.extend(ins)
+                        outss.append(out)
+                return [Dep(var_nodes_to_abs_set(inss), var_nodes_to_abs_set(outss), guard)]
+
+            if dep_policy.on_var_basis():
+                eqs: Dict[FrozenSet[VarNode], List[VarNode]] = {}
+                for out in self.last_iter_output:
+                    ins = frozenset(self.input_that_outputs_might_depend_on([out]))
+                    if ins not in eqs:
+                        eqs[ins] = []
+                    eqs[ins].append(out)
+
+                if dep_policy == DepGenerationPolicy.FULL_VARS:
+                    return [Dep(var_nodes_to_abs_set(ins), var_nodes_to_abs_set([out]), guard) for ins, outs in
+                            eqs.items() for out in outs]
+                elif dep_policy == DepGenerationPolicy.MULTIPLE_DEP_VARS:
+                    return [Dep(var_nodes_to_abs_set(ins), var_nodes_to_abs_set(outs), guard) for ins, outs in
+                            eqs.items()]
+                assert False
+            else:
+                assert False
+            assert False
 
     def __hash__(self):
         return hash([self.id, self.func_id, self.nr])
-
-
-@dataclass(eq=True)
-class AbortedRecursion(Aborted):
-    id: str
-    returns: List[VarNode]
-    params: List[VarNode]
-
-    def compute_dependency(self) -> Dep:
-        return Dep(frozenset(var_nodes_to_ints(self.params)),
-                   frozenset(var_nodes_to_ints(self.returns)),
-                   self.guard_conjunction())
-
-    def __hash__(self):
-        return hash(self.id)
 
 
 class Graph:
@@ -172,8 +185,6 @@ class Graph:
         self.sat_nodes: List[Node] = []
         self.loop_iters: List[LoopIter] = []
         self.loop_representative: Dict[(str, int), LoopIter] = {}  # (func_id, loop_nr) → last loop iter
-        self.recursions: List[AbortedRecursion] = []
-        self.recursion_representative: Dict[str, AbortedRecursion] = {}
         self.relations: List[List[VarNode]] = []
         self.rec_nodes: NodeStore = NodeStore()
         self._finished_rec_nodes = False
@@ -304,6 +315,7 @@ class Graph:
             for v in vs:
                 var_node = self.get_sat_node(v)
                 var_node.origin.append(dep)
+                rel.append(var_node)
         self._relate(rel)
 
     def _parse_dep(self, line: str):
@@ -360,7 +372,7 @@ class Graph:
     def is_recursion_node_line(line: str) -> bool:
         return line.startswith("c rec node ")
 
-    def _parse_recursion_nodes_line(self, line: str):
+    def _parse_recursion_node_line(self, line: str):
         """ Only valid if all variable lines are parsed """
         func_id_part, input_part, output_part = line[len("c rec node "):].split(" | ")
         func_id = func_id_part.strip()
@@ -372,6 +384,10 @@ class Graph:
 
     @staticmethod
     def _find_origins(start_nodes: List[Node]) -> Set[Origin]:
+        """
+        Find all nodes that the start nodes are related to (and themselves) and return their combined
+        origins
+        """
         origins: Set[Origin] = set()
 
         def visit(node: Node):
@@ -393,11 +409,18 @@ class Graph:
         clauses: Set[int] = set(range(len(self.cnf.clauses)))
 
         for node in self.rec_nodes.values():
+            # given a recursion node, find
+            #   - the clauses and deps that belong to it
+            #   - find its children
+
             node_deps: Set[Dep] = set()
             node_children: Set[RecursionChild] = set()
             node_clauses: Set[int] = set()
 
-            for origin in self._find_origins([self.get_sat_node(var) for var in node.acnf.input.combined_clause()]):
+            # vars that are related to the return
+            return_vars = [self.get_sat_node(var) for var in node.acnf.output.combined_clause()]
+
+            for origin in self._find_origins(return_vars):
                 if isinstance(origin, Dep):
                     node_deps.add(origin)
                     deps.remove(origin)
@@ -419,13 +442,18 @@ class Graph:
         self._finished_rec_nodes = True
         return list(self.rec_nodes.values())
 
-    def process_recursion_graph(self) -> RecursionProcessingResult:
+    def process_recursion_graph(self, dep_policy: DepGenerationPolicy) -> RecursionProcessingResult:
         # todo: currently only uses the default config for variability over approximation
         from dsharpy.counter import State
-        return MaxVariabilityRecursionProcessor(self._create_recursion_graph(), lambda c: State(c).compute()).run()
+        rec = self._create_recursion_graph()
+        state = RecursionProcessingResult(dep_policy)
+        DepEqClassesRecursionProcessor(rec, state).run()
+        MaxVariabilityRecursionProcessor(rec, lambda c: State(c).compute(), state).run()
+        return state
 
     @classmethod
-    def parse_graph(cls, raw_lines: List[str], ind_var_prefix: str = None, use_latest_ind_var: bool = True) -> "Graph":
+    def parse_graph(cls, raw_lines: List[str], dep_policy: DepGenerationPolicy, ind_var_prefix: str = None,
+                    use_latest_ind_var: bool = True) -> "Graph":
         graph = Graph()
         lines = []
         recursion_child_lines: List[str] = []
@@ -456,25 +484,28 @@ class Graph:
         for recursion_child_line in recursion_child_lines:
             graph._parse_rec_child_line(recursion_child_line)
         for recursion_node_line in recursion_node_lines:
-            graph._parse_recursion_nodes_line(recursion_node_line)
+            graph._parse_recursion_node_line(recursion_node_line)
         graph.update_var_deps()
         if ind_var_prefix:
             ind = graph.find_ind_vars(ind_var_prefix, use_latest_ind_var)
             graph.cnf.add_ind(*ind)
-        for loop_iter in graph.loop_iters + graph.recursions:
-            graph._add_dep(loop_iter.compute_dependency())
+        for loop_iter in graph.loop_iters:
+            for dep in loop_iter.compute_dependencies(dep_policy):
+                graph._add_dep(dep)
 
-        proc_res = graph.process_recursion_graph()
+        proc_res = graph.process_recursion_graph(dep_policy)
         for rec_child in graph.rec_children:
-            dep, clauses = proc_res.to_dep(rec_child, graph.cnf.nv + 1)
-            graph.cnf.add_dep(dep)
+            deps, clauses = proc_res.to_dep(rec_child, graph.cnf.nv + 1)
+            for dep in deps:
+                graph.cnf.add_dep(dep)
             graph.cnf.append(clauses)
 
         return graph
 
     @classmethod
-    def process(cls, infile: IOBase, out: IOBase, ind_var_prefix: str = None, use_latest_ind_var: bool = True):
-        cls.parse_graph(infile.readlines(), ind_var_prefix, use_latest_ind_var).cnf.to_fp(out)
+    def process(cls, infile: IOBase, out: IOBase, dep_policy: DepGenerationPolicy, ind_var_prefix: str = None,
+                use_latest_ind_var: bool = True):
+        cls.parse_graph(infile.readlines(), dep_policy, ind_var_prefix, use_latest_ind_var).cnf.to_fp(out)
 
 
 @click.command(name="convert", help="""
@@ -484,8 +515,9 @@ Variables that start with __out are used for creating "c ind" statements (only t
 """)
 @click.argument('infile', type=click.File(mode="r"), required=False, default="-")
 @click.argument('outfile', type=click.File(mode="w"), required=False, default="-")
-def cli(infile: IOBase, outfile: IOBase):
-    Graph.process(infile, outfile, ind_var_prefix="__out")
+@click.argument('dep_gen_policy', type=DepGenerationPolicy, default=DepGenerationPolicy.FULL_VARS)
+def cli(infile: IOBase, outfile: IOBase, dep_gen_policy: DepGenerationPolicy):
+    Graph.process(infile, outfile, dep_gen_policy, ind_var_prefix="__out")
 
 
 if __name__ == '__main__':

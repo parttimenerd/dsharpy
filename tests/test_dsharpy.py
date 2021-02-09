@@ -11,7 +11,8 @@ from pytest_check import check
 from dsharpy.convert import Graph
 from dsharpy.counter import State, Config
 from dsharpy.formula import sat, DCNF, count_sat, Dep, RangeSplitXORGenerator
-from dsharpy.util import random_seed, process_code_with_cbmc, process_code_with_jbmc, CBMCOptions, single
+from dsharpy.util import random_seed, process_code_with_cbmc, process_code_with_jbmc, CBMCOptions, single, \
+    DepGenerationPolicy
 from tests.util import load
 
 
@@ -284,7 +285,7 @@ void main()
   char __out = res;
   assert(non_det_char());
 }
-""")
+""", CBMCOptions(dep_gen_policy=DepGenerationPolicy.MULTIPLE_DEP_VARS))
     state = State.from_string(string, config=Config(xor_generator=RangeSplitXORGenerator()))
     assert len(state.cnf.deps) == 1
     dep, cnf, new_state = state.split()
@@ -356,12 +357,13 @@ def test_global_variables_with_recursion():
       char __out = global;
       END;
     }
-    """, CBMCOptions(rec=0))
+    """, CBMCOptions(rec=0, abstract_rec=0, dep_gen_policy=DepGenerationPolicy.FULL_VARS))
     state = State.from_string(string)
-    assert len(state.cnf.deps) == 1
+    assert len(state.cnf.deps) == 2
     dep, cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
     assert available_variability == 256
+    assert math.log2(state.cnf.deps[0].max_variability) == 16
 
     assert math.log2(state.compute()) == 8
 
@@ -400,14 +402,14 @@ void main()
   bool __out = fib(non_det_bool());
   END;
 }
-""", CBMCOptions(rec=0, abstract_rec=0, verbose=True))
+""", CBMCOptions(rec=0, abstract_rec=0))
     state = State.from_string(string)
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
     assert available_variability == 1
     val = state.compute()
-    assert val == 2  # was 256 before, but maybe this time it isn't ABI related (bool is an byte for ABI)?
+    assert val == 2  # non_det_bool() returns a proper one bit bool (not the worst case for ABI, but ok nonetheless)
 
 
 def test_recursive_code_reduced_with_guard_and_abstract_rec2():
@@ -441,16 +443,16 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
     assert available_variability == 2
     val = state.compute()
     assert val == 2
-    print(val)
 
 
-def compute_with_abstract_rec(code: str, expected_deps: int) -> int:
+def compute_with_abstract_rec(code: str, expected_deps: int, av_var: int = None) -> int:
     string = process_code_with_cbmc(code, CBMCOptions(rec=0, abstract_rec=0))
     state = State.from_string(string)
     assert len(state.cnf.deps) == expected_deps
-    # ret, cnf, new_state = state.split()
-    # available_variability = state._count_sat(cnf)
-    # assert math.log2(available_variability) == 31
+    if av_var is not None:
+        ret, cnf, new_state = state.split()
+        available_variability = state._count_sat(cnf)
+        assert math.log2(available_variability) == av_var
     val = state.compute()
     return math.log2(val)
 
@@ -481,7 +483,7 @@ def test_abstract_rec_with_const_arg():
       bool __out = fib(1);
       END;
     }
-    """, expected_deps=1) == 0
+    """, expected_deps=1, av_var=0) == 0
 
 
 def test_fib_with_abstract_rec():
@@ -489,7 +491,7 @@ def test_fib_with_abstract_rec():
 
     def check_graph(g: Graph):
         # the function fib should have a maximum variability of 9
-        assert single(g.process_recursion_graph().max_variability) == 9
+        assert single(g.process_recursion_graph(dep_policy=DepGenerationPolicy.SINGLE_DEP).max_variability) == 9
         # the return value of the function (and thereby __out) should be    (0) ? (1) : (2)    and therefore != (1)
         assert g.cnf.deps[0].ret != g.cnf.ind
 
@@ -542,7 +544,7 @@ def test_basic_java2():
     static int __out = 0;
     public static void main(String[] args) {
       int secret = non_det(); // get a random integer
-       int val = secret | 1; // only uneven integers
+      int val = secret | 1; // only uneven integers
       if (val > 32 || val < 0){
         val = 1;
       }
