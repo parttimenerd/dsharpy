@@ -3,18 +3,12 @@ Black box tests for the conversion and the modified CBMC
 """
 import pytest
 
-from dsharpy import convert
 from dsharpy.formula import DCNF
 from dsharpy.util import process_code_with_cbmc, CBMCOptions, DepGenerationPolicy
 from tests.util import assert_deps_independent
 
 
 def test_small_recursive_code():
-    def check(g: convert.Graph):
-        rec = g._create_recursion_graph()
-        assert rec
-        assert rec[0].acnf.input.combined_clause()
-
     string = process_code_with_cbmc("""
     bool fib(bool num){
       return fib(num) & 1;
@@ -25,7 +19,7 @@ def test_small_recursive_code():
       bool __out = fib(non_det_bool());
       END;
     }
-    """, options=CBMCOptions(rec=0, abstract_rec=0, process_graph=check, dep_gen_policy=DepGenerationPolicy.FULL_VARS))
+    """, options=CBMCOptions(rec=0, abstract_rec=0, dep_gen_policy=DepGenerationPolicy.FULL_VARS))
     deps = DCNF.load_string(string).deps
     assert_deps_independent(deps)
     assert len(deps) == 1

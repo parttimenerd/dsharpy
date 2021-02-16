@@ -9,7 +9,7 @@ import sys
 import tempfile
 from abc import abstractmethod
 from collections import deque
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -30,6 +30,8 @@ class Dep:
     constraint: FrozenSet[int] = field(default_factory=frozenset)
     max_variability: Optional[float] = None
     """ >= 0 """
+    fully_over_approximate: bool = False
+    """ don't compute the variability of the params """
 
     def __post_init__(self):
         assert all(v > 0 for vs in [self.param, self.ret] for v in vs)
@@ -41,7 +43,8 @@ class Dep:
     def to_comment(self) -> str:
         if self.empty():
             return f"c empty dep from {' '.join(map(str, self.param))}"
-        parts = [self.param, self.ret, self.constraint, [self.max_variability or 'inf']]
+        parts = [self.param, self.ret, self.constraint, [self.max_variability or 'inf'],
+                 [int(self.fully_over_approximate)]]
         return f"c dep {' 0 '.join(' '.join(map(str, sorted(x))) for x in parts)}"
 
     @classmethod
@@ -49,13 +52,14 @@ class Dep:
         assert comment.startswith("c dep ")
         assert comment.count(" 0 ") >= 1
         atoms = comment[len("c dep "):].split(" ")
-        param_part, ret_part, constraint_part, max_dep_part = ("  ".join(atoms) + " 0  0  0  ").split(" 0 ", maxsplit=3)
+        param_part, ret_part, constraint_part, max_dep_part, sfoa_part = ("  ".join(atoms) + " 0  0  0  0  ") \
+            .split(" 0 ", maxsplit=4)
 
         def split(part: str) -> FrozenSet[int]:
             return frozenset(int(i) for i in part.split(" ") if len(i) and i != "0")
 
         return Dep(split(param_part), split(ret_part), split(constraint_part),
-                   float(val) if (val := max_dep_part.strip().split(" ")[0]) != "0" else None)
+                   float(val) if (val := max_dep_part.strip().split(" ")[0]) != "0" and val else None, "1" in sfoa_part)
 
     def __str__(self) -> str:
         return f"{set(self.param)} ~{set(self.constraint)}~{self.max_variability or 'inf'}~> {set(self.ret)}"
@@ -65,6 +69,9 @@ class Dep:
 
     def vars(self) -> List[int]:
         return [abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs]
+
+    def add_constraint(self, constraint: int) -> "Dep":
+        return Dep(self.ret, self.param, self.constraint | {constraint}, self.fully_over_approximate)
 
 
 Deps = List[Dep]
@@ -78,9 +85,9 @@ class DCNF(CNF):
                  from_aiger=None,
                  ind: Set[int] = None, deps: Deps = None, independents: Independents = None):
         super().__init__(from_file, from_fp, from_string, from_clauses or [], from_aiger, comment_lead=['c'])
-        self.ind = ind or set()
+        self.ind: Set[int] = ind or set()
         self.deps: Deps = deps or []
-        self.independents = independents or []
+        self.independents: Independents = independents or []
         self._update_from_comments(self.comments)
 
     def _update_comments(self, new_ind: Iterable[int], new_deps: Deps, new_indies: Independents):
@@ -237,6 +244,32 @@ class DCNF(CNF):
         ret._update_comments(new_ind, self.deps, self.independents)
         ret.ind = set(new_ind)
         return ret
+
+    def compress(self) -> Tuple["DCNF", Dict[int, int]]:
+        """
+        Make all ids contiguous
+
+        :return old id → new id
+        """
+        from dsharpy.recursion_graph import transpose_dep
+        mapping: Dict[int, int] = {}
+
+        def transpose(var: int) -> int:
+            if var not in mapping:
+                mapping[var] = len(mapping) + 1
+
+        clauses = [[transpose(var) for var in clause] for clause in self.clauses]
+        ind = {transpose(i) for i in self.ind}
+        indep = [{(transpose(a), transpose(b)) for a, b in s} for s in self.independents]
+        deps: List[Dep] = []
+        for dep in self.deps:
+            small_map = {}
+            for var in dep.vars():
+                small_map[var] = transpose(var)
+            deps.append(transpose_dep(dep, small_map))
+        cnf = DCNF(from_clauses=clauses)
+        cnf._update_comments(ind, deps, indep)
+        return cnf, mapping
 
 
 def blast_xor(variables: List[int], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:

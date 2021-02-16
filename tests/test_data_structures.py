@@ -20,7 +20,7 @@ def test_union_find():
         assert forest.find(1) != forest.find(i)
 
     forest.union_many([[5, 6], 7, [8, -9]])
-    forest.n_sets == 3
+    assert forest.n_sets == 3
     assert len(forest.find_eq_classes()) == 3
 
     relations, eq_classes = forest.find_related([0, 1, 5, 6], [0, 1, 5, 6])

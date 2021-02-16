@@ -1,5 +1,4 @@
 p cnf 1 0
 c ind 1 0
 c dep 1 0 1
-c test count 0
-c this is unsatisfiable
+c test count 2

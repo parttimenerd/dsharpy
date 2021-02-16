@@ -188,6 +188,7 @@ class CBMCOptions:
     dep_gen_policy: DepGenerationPolicy = DepGenerationPolicy.FULL_VARS
     preprocess: bool = True
     verbose: bool = False
+    compute_max_vars: bool = True
     process_graph: Callable[["convert.Graph"], None] = field(default_factory=lambda: (lambda g: None))
 
     def __post_init__(self):
@@ -267,7 +268,7 @@ def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None,
         if isinstance(c_file, Path):
             print(c_file.read_text())
     graph = convert.Graph.parse_graph(cbmc_out.split("\n"), options.dep_gen_policy,
-                                      "__out", use_latest_ind_var=True)
+                                      "__out", use_latest_ind_var=True, compute_max_vars=options.compute_max_vars)
     options.process_graph(graph)
     graph.cnf.to_fp(out)
 
@@ -301,7 +302,6 @@ def build_java(code: str) -> Path:
     java_file.write_text(code)
     print(code)
     cmd = f"cd {tmp_dir.absolute()}; javac {java_file.absolute()} -cp {jbmc_models_classpath()} -d ."
-    print(cmd)
     subprocess.check_call(cmd, shell=True)
     return tmp_dir
 

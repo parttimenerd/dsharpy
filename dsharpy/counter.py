@@ -1,4 +1,5 @@
 import math
+import multiprocessing
 import os
 import shutil
 import tempfile
@@ -21,7 +22,7 @@ class Config:
     amc_epsilon: float = 0.8
     amc_delta: float = 0.2
     amc_forcesolextension: bool = False
-    log_iterations: bool = False
+    log_iterations: bool = True
     epsilon: float = 0.2
     delta: float = 0.8
     check_xors_for_variability: bool = True
@@ -103,7 +104,8 @@ class State:
             """ no splitting needed, ends the recursion """
             return self._count_sat(self.cnf)
         dep, cnf, new_state = self.split()
-        available_variability: float = self._count_sat(cnf)
+        available_variability: float = 2 ** min(len(dep.param),
+                                                len(dep.ret)) if dep.fully_over_approximate else self._count_sat(cnf)
 
         if available_variability == 0:  # this is most likely due to the constraints being unsatisfiable
             assert not sat(cnf)
@@ -132,17 +134,17 @@ class State:
         new_state.cnf.extend(new_clauses)
         return new_state.compute()
 
-    def compute_loop(self, iterations: int) -> float:
-        if not sat(self.cnf):
-            return -1
-        counts: List[float] = []
-        for run in range(iterations):
-            count = self.compute()
-            counts.append(count)
-            if self.config.log_iterations:
-                print(f"-- run {run:2d}: {count:3f}     median = {median(counts):3f}  max = {max(counts):3f}")
+    def _compute_loop_iter(self, num: int) -> float:
+        count = self.compute()
+        if self.config.log_iterations:
+            print(f"-- run {num:2d}: {count:3f}")
+        return count
 
-        return max(counts)
+    def compute_loop(self, iterations: int) -> float:
+        counts: List[float] = []
+        with multiprocessing.Pool() as p:
+            counts = list(p.map(self._compute_loop_iter, range(iterations)))
+        return median(counts)
 
 
 @dataclass

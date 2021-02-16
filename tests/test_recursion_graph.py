@@ -82,7 +82,7 @@ def test_abstract_rec_to_applicable():
                              [RecursionChild(node_store=node_store, id=0, node_id='fib(char)', input=NameMapping(
                                  base={'fib(char)::num': [82, 83]}), output=NameMapping(
                                  base={'fib(char)#return_value': [158, 159]}),
-                                             constraint={2})])
+                                             constraint={2})], fully_over_approximate=False)
     node_store[rec_node.id] = rec_node
     proc_res = RecursionProcessingResult(max_variability={rec_node: 9}, dep_policy=DepGenerationPolicy.FULL_VARS)
     rec_child = RecursionChild(node_store={'fib(char)': rec_node}, id=1, node_id='fib(char)',

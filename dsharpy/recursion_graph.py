@@ -10,7 +10,7 @@ from abc import abstractmethod, ABC
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import List, Mapping, Iterator, Dict, Set, MutableMapping, Optional, Callable, Deque, Iterable, FrozenSet, \
-    Tuple, Union, TypeVar, Generic
+    Tuple, Union
 
 from dsharpy.formula import Deps, Dep, count_sat, DCNF, IncrementalRelations
 from dsharpy.util import DepGenerationPolicy
@@ -51,6 +51,7 @@ def create_mapping(vars: Set[int], new_start: int = 0, keep: List[int] = None,
     """
     Create a mapping of each of the variables to a new variables
 
+    :param vars: variables to map
     :param new_start: start variable for new variables
     :param keep: keep the passed variables unchanged
     :param custom_mapping: keep these mappings (overriden by keep)
@@ -146,6 +147,10 @@ class NameMapping(Mapping[str, Variables]):
 
     def values(self) -> Iterable[Variables]:
         return self.base.values()
+
+    def __or__(self, other: "NameMapping") -> "NameMapping":
+        assert all(name not in other.base for name in self.base)
+        return NameMapping({**self.base, **other.base})
 
 
 def transpose_dep(dep: Dep, param_mapping: IntToVariableMap, ret_mapping: IntToVariableMap = None,
@@ -307,7 +312,7 @@ class RecursionChild:
                 self._cached = self.node_store[self.node_id]
             else:
                 self._cached = RecursionNode(f"{self.node_id} {self.id}", DefaultApplicableCNF(self.input, self.output),
-                                             [])
+                                             [], fully_over_approximate=False)
         return self._cached
 
     def __hash__(self):
@@ -316,23 +321,29 @@ class RecursionChild:
     def __eq__(self, other):
         return other.id == self.id
 
+    def add_constraint(self, new_id: int, constraint: int) -> "RecursionChild":
+        return RecursionChild(self.node_store, new_id, self.node_id, self.input, self.output,
+                              self.constraint | {constraint}, self._cached)
+
 
 class RecursionNode:
     """
     A node in the recursion graph
     """
 
-    def __init__(self, id: str, acnf: ApplicableCNF, children: List[RecursionChild]):
+    def __init__(self, id: str, acnf: ApplicableCNF, children: List[RecursionChild], fully_over_approximate: bool):
         """
         Constructor
 
         :param id: name of the function (just a unique id used for comparison and hashing)
         :param acnf: the cnf of this recursion node with inputs, outputs and non recursive deps
         :param children: recursive calls that lead to aborted recursion in this node
+        :param fully_over_approximate: fully over approximate (don't compute the variability of the inputs)
         """
         self.id = id
         self.acnf = acnf
         self.children = children
+        self.fully_over_approximate = fully_over_approximate
 
     def __hash__(self):
         return hash(self.id)
@@ -366,18 +377,6 @@ class RecursionNode:
         if all_clauses:
             acnf = self.acnf.add_clauses(all_clauses)
         return acnf.add_deps(all_deps)
-
-
-class DefaultRecursionNode(RecursionNode):
-
-    def __init__(self, id: str):
-        super(DefaultRecursionNode, self).__init__(id, DefaultApplicableCNF(), [])
-
-    def to_applicable(self,
-                      child_to_dep: Callable[[RecursionChild, int], Union[Dep, Tuple[Dep, Clauses]]] =
-                      lambda c, n: Dep(frozenset(c.input.combined_clause()), frozenset(c.output.combined_clause()),
-                                       frozenset(c.constraint))) -> ApplicableCNF:
-        return DefaultApplicableCNF()
 
 
 def walk_recursion_nodes(start_nodes: List[RecursionNode], children: Callable[[RecursionNode], Iterable[RecursionNode]],
@@ -436,25 +435,19 @@ def walk_recursion_nodes(start_nodes: List[RecursionNode], children: Callable[[R
             add_all(parents[node])
 
 
-T = TypeVar("T")
-
-
 @dataclass(frozen=True)
-class EqClasses(Generic[T]):
-    partitions: Tuple[Tuple[T]]
+class EqClasses:
+    partitions: Tuple[Tuple[int]]
     """ input partitions"""
-    base: Dict[FrozenSet[T], FrozenSet[T]]
-    on_var_level: bool
-    """ true → base is based on strings """
+    base: Dict[FrozenSet[int], FrozenSet[int]]
 
     @classmethod
-    def create_default(cls, node: RecursionNode, on_var_level: bool) -> "Union[EqClasses[str],EqClasses[int]]":
-        partition = node.acnf.input.keys() if on_var_level else node.acnf.input.combined_clause()
-        output = node.acnf.output.keys() if on_var_level else node.acnf.output.combined_clause()
-        return EqClasses((tuple(partition),), {frozenset(partition): frozenset(output)}, on_var_level)
+    def create_default(cls, node: RecursionNode) -> "EqClasses":
+        partition = node.acnf.input.combined_clause()
+        output = node.acnf.output.combined_clause()
+        return EqClasses((tuple(partition),), {frozenset(partition): frozenset(output)})
 
-    def __eq__(self, other: "EqClasses[T]") -> bool:
-        assert self.on_var_level == other.on_var_level
+    def __eq__(self, other: "EqClasses") -> bool:
         return self.partitions == other.partitions and self.base == other.base
 
     def __hash__(self) -> int:
@@ -465,12 +458,12 @@ class EqClasses(Generic[T]):
 class RecursionProcessingResult:
     dep_policy: DepGenerationPolicy
     max_variability: Dict[RecursionNode, float] = field(default_factory=lambda: defaultdict(lambda: float("inf")))
-    eq_classes: Dict[RecursionNode, EqClasses[int]] = field(default_factory=dict)
+    eq_classes: Dict[RecursionNode, EqClasses] = field(default_factory=dict)
     constraints: Dict[RecursionNode, Clauses] = field(default_factory=lambda: defaultdict(list))
 
-    def get_eq_classes(self, node: RecursionNode) -> Union[EqClasses[int], EqClasses[str]]:
+    def get_eq_classes(self, node: RecursionNode) -> EqClasses:
         if node not in self.eq_classes:
-            self.eq_classes[node] = EqClasses.create_default(node, on_var_level=False)
+            self.eq_classes[node] = EqClasses.create_default(node)
         return self.eq_classes[node]
 
     def to_meta_dep(self, node: RecursionNode) -> Callable[[RecursionChild], Deps]:
@@ -493,9 +486,11 @@ class RecursionProcessingResult:
                 else:
                     output_classes = [frozenset([output]) for output in outputs]
                 for output in output_classes:
-                    deps.append(Dep(tinputs, output, frozenset(), self.max_variability[node]))
+                    deps.append(Dep(tinputs, output, frozenset(), self.max_variability[node],
+                                    fully_over_approximate=node.fully_over_approximate))
             else:
-                deps.append(Dep(tinputs, frozenset(outputs), frozenset(), self.max_variability[node]))
+                deps.append(Dep(tinputs, frozenset(outputs), frozenset(), self.max_variability[node],
+                                fully_over_approximate=node.fully_over_approximate))
 
         def create_m(node: RecursionNode, child: RecursionChild) -> IntToVariableMap:
             m: IntToVariableMap = {}
@@ -507,7 +502,7 @@ class RecursionProcessingResult:
             tds = transpose_deps(deps, node.acnf.input.create_mapping(child.input),
                                  node.acnf.output.create_mapping(child.output))
             constraint = frozenset(child.constraint)
-            return [Dep(td.param, td.ret, constraint, td.max_variability) for td in tds]
+            return [Dep(td.param, td.ret, constraint, td.max_variability, node.fully_over_approximate) for td in tds]
 
         return creator
 
@@ -526,7 +521,7 @@ class RecursionProcessingResult:
             new_clauses = transpose_clauses(misc_cons, create_mapping(get_vars(misc_cons), start_id + 1))
             new_clauses_impl = [[-start_id] + clause for clause in new_clauses]
             return [Dep(dep.param, dep.ret, frozenset({start_id, *dep.constraint}),
-                        dep.max_variability) for dep in deps], new_clauses_impl
+                        dep.max_variability, dep.fully_over_approximate) for dep in deps], new_clauses_impl
         return deps, []
 
     def to_full_applicable(self, node: RecursionNode) -> ApplicableCNF:
@@ -572,6 +567,8 @@ class MaxVariabilityRecursionProcessor(RecursionProcessor):
         return self.state.update(node, max_variability=self._calculate_max_variability(node))
 
     def _calculate_max_variability(self, node: RecursionNode) -> float:
+        if node.fully_over_approximate:
+            return float("inf")
         return self.state.to_full_applicable(node).count_sat(self.variability_estimator)
 
 
@@ -603,7 +600,7 @@ class DepEqClassesRecursionProcessor(RecursionProcessor):
             start_id = max((dep.max_var() for dep in deps_), default=1) + 1
             deps.extend(deps_)
         rels, eqs = inc.compute(deps)
-        return EqClasses(tuple(map(tuple, eqs)), {frozenset(eq): rels[eq[0]] for eq in eqs}, on_var_level=False)
+        return EqClasses(tuple(map(tuple, eqs)), {frozenset(eq): rels[eq[0]] for eq in eqs})
 
     def _get_inc(self, node: RecursionNode) -> IncrementalRelations:
         if node not in self.incs:

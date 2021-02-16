@@ -2,4 +2,4 @@ p cnf 3 1
 1 -1 0
 c ind 2 3 0
 c dep 1 2 0 3 0
-c test count 2
+c test count 4
