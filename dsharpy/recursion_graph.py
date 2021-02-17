@@ -319,7 +319,7 @@ class RecursionChild:
         return self.id
 
     def __eq__(self, other):
-        return other.id == self.id
+        return isinstance(other, RecursionChild) and other.id == self.id
 
     def add_constraint(self, new_id: int, constraint: int) -> "RecursionChild":
         return RecursionChild(self.node_store, new_id, self.node_id, self.input, self.output,

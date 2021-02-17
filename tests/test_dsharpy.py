@@ -240,8 +240,8 @@ void main()
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
-    assert available_variability == 126  # todo: correct?
-    assert state.compute() >= 128  # todo: correct?
+    assert available_variability == 126
+    assert state.compute() == 128
 
 
 def test_small_loop_reduced():
@@ -468,7 +468,6 @@ def test_abstract_rec_with_double_rec():
 
     void main()
     {
-      bool arg = non_det_bool();
       bool __out = fib(1) && fib(1);
       END;
     }
@@ -526,6 +525,37 @@ __out = (num > 1 && num < 9) ? (num ~{max:8}~> unknown) : 0 // this might produc
     assert state.compute() == 9
 
 
+@pytest.mark.skip("takes currently 21:23 minutes on my laptop")
+def test_loops_and_recursion_mixed():
+    string = process_code_with_cbmc("""
+    int r(int c){
+        int a = 0;
+        while (a < c){
+            a++;
+            c--;
+        }
+        return a;
+    }   
+    
+    int f(int a){
+        if (a < 0){
+            return f(a + 1);
+        }
+        return r(a);
+    }
+    
+    void main(){
+        int h = non_det_char();
+        while (h != f(h)){
+            h--;
+        }
+        char __out = f(h);
+        END;
+    }
+    """, options=CBMCOptions(compute_max_vars=False))
+    assert State.from_string(string).compute() == 256
+
+
 def test_basic_java():
     string = process_code_with_jbmc("""
     static int __out = 0;
@@ -539,6 +569,7 @@ def test_basic_java():
     assert math.log2(state.compute()) == 32
 
 
+@pytest.mark.skip("takes long and does not add any benefit compared to the basic_java test")
 def test_basic_java2():
     string = process_code_with_jbmc("""
     static int __out = 0;
@@ -564,6 +595,9 @@ class TestFile:
 
     def test_test0(self):
         self.check_case("test0.cnf")
+
+    def test_test0_without_trim(self):
+        self.check_case("test0.cnf", Config(trim=False))
 
     def test_test1(self):
         self.check_case("test1.cnf")
@@ -646,11 +680,10 @@ MATestCases = {
         """,
         "leakage": (31, 32)
     },
-    "electronic purse 2": {  # todo: why should it leak the whole secret?
+    "electronic purse 2": {
         "code": """
         /* Toy program from paper of Backes et. al:  "Automatic */
         /* discovery and quantification of information leaks" */
-        /* Should leak the whole secret */
         void main(){
             int H = (char)non_det();
             int O = 0;

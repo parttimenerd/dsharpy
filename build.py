@@ -1,4 +1,4 @@
-#!`which python3`
+#! env python3
 
 # source: https://github.com/mdgoldberg/poetry-cython-example/blob/master/build.py
 

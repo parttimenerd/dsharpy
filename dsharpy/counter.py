@@ -28,6 +28,7 @@ class Config:
     check_xors_for_variability: bool = True
     """ Check that the added xors lead to the variables having the desired variability in the rest of the program """
     xor_generator: XORGenerator = field(default_factory=RangeSplitXORGenerator)
+    trim: bool = True
 
     def __post_init__(self):
         rel = math.log2(self.parallelism)
@@ -63,6 +64,7 @@ class State:
         header_cnf = CNF()
         header_cnf.from_clauses(self.cnf.clauses)
         header_cnf.comments = [DCNF.format_ind_comment(dep.param)]
+        header_cnf.nv = max(header_cnf.nv, max(dep.param, default=0))
         for guard in dep.constraint:
             header_cnf.append([guard])
         remaining_state = State(
@@ -86,7 +88,8 @@ class State:
     def _count_sat(self, cnf: Union[List[CNF], CNF]) -> Union[List[Optional[float]], Optional[float]]:
         return count_sat(cnf, epsilon=self.config.amc_epsilon,
                          delta=self.config.amc_delta,
-                         forcesolextension=self.config.amc_forcesolextension)
+                         forcesolextension=self.config.amc_forcesolextension,
+                         trim=self.config.trim)
 
     def create_random_xor_clauses(self, variables: Iterable[int], available_variability: float) -> XORs:
         """ Create an xor clause that restricts the variable of the passed vars to 2^{passed bits} (on average) """
@@ -95,6 +98,7 @@ class State:
     def approximate_variability_of_clauses(self, cnf: DCNF, new_clauses: List[List[int]], ind: Iterable[int],
                                            constraints: Set[int] = None) -> float:
         new_cnf = CNF(from_clauses=cnf.clauses + new_clauses + [[constraint] for constraint in (constraints or [])])
+        new_cnf.nv = max(cnf.nv, new_cnf.nv)
         new_cnf.comments = [DCNF.format_ind_comment(ind)]
         return self._count_sat(new_cnf)
 

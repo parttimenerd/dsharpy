@@ -65,7 +65,7 @@ class Dep:
         return f"{set(self.param)} ~{set(self.constraint)}~{self.max_variability or 'inf'}~> {set(self.ret)}"
 
     def max_var(self) -> int:
-        return max(abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs)
+        return max((abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs), default=0)
 
     def vars(self) -> List[int]:
         return [abs(v) for vs in [self.param, self.ret, self.constraint] for v in vs]
@@ -85,15 +85,18 @@ class DCNF(CNF):
                  from_aiger=None,
                  ind: Set[int] = None, deps: Deps = None, independents: Independents = None):
         super().__init__(from_file, from_fp, from_string, from_clauses or [], from_aiger, comment_lead=['c'])
-        self.ind: Set[int] = ind or set()
-        self.deps: Deps = deps or []
+        self.ind: Set[int] = set()
+        self.deps: Deps = []
+        self.comments.append(self.format_ind_comment(ind or set()))
+        for dep in deps or []:
+            self.comments.append(dep.to_comment())
         self.independents: Independents = independents or []
         self._update_from_comments(self.comments)
+        assert not self.independents
 
     def _update_comments(self, new_ind: Iterable[int], new_deps: Deps, new_indies: Independents):
         self.comments.append(self.format_ind_comment(new_ind))
         self.comments.extend(dep.to_comment() for dep in new_deps)
-        self.comments.extend(f"c indies {' '.join(map(lambda s: f'{s[0]} {s[1]}', i))}" for i in new_indies)
 
     def _clean_up_comments(self):
         """ Remove all ind and deps related comments """
@@ -148,7 +151,7 @@ class DCNF(CNF):
         diff = set(ind) - self.ind
         self.ind.update(diff)
         self.comments.append(self.format_ind_comment(diff))
-        self.nv = max(self.nv, max(diff))
+        self.nv = max(self.nv, max(diff, default=0))
 
     def add_dep(self, dep: Dep):
         self.deps.append(dep)
@@ -270,6 +273,11 @@ class DCNF(CNF):
         cnf = DCNF(from_clauses=clauses)
         cnf._update_comments(ind, deps, indep)
         return cnf, mapping
+
+    def update_nv_from_misc(self):
+        """ update nv from ind, dep and independents """
+        self.nv = max(self.nv, max(self.ind, default=0), max((dep.max_var() for dep in self.deps), default=0),
+                      max((max(map(max, ind_set), default=0) for ind_set in self.independents), default=0))
 
 
 def blast_xor(variables: List[int], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:
@@ -441,7 +449,7 @@ class CNFGraph:
         if copy_comments:
             cnf.comments = self.cnf.comments
         cnf.from_clauses([self.cnf.clauses[c] for c in visited_clauses])
-        cnf.nv = max(cnf.nv, max(relevant_vars))
+        cnf.nv = max(cnf.nv, max(relevant_vars, default=0))
         return cnf
 
     def clause_for_var(self, var: int) -> List[int]:
@@ -514,16 +522,16 @@ class IncrementalRelations:
 
 
 def trim_dcnf(cnf: DCNF, anchors: Iterable[int] = None) -> DCNF:
-    """ Removes all clauses that are independent from the passed vars or cnf.ind """
-    return trim_dcnf_graph(CNFGraph(cnf), anchors)
-
-
-def trim_dcnf_graph(graph: CNFGraph, anchors: Iterable[int] = None) -> DCNF:
+    """
+    Removes all clauses that are independent from the passed vars or cnf.ind
+    """
+    graph = CNFGraph(cnf)
     cnf = graph.cnf
     assert isinstance(cnf, DCNF)
     new_cnf = graph.sub_cnf(anchors or cnf.ind, copy_comments=True)
     new_dcnf = DCNF(from_clauses=new_cnf.clauses, ind=cnf.ind, deps=cnf.deps, independents=cnf.independents)
     new_dcnf.comments = cnf.comments
+    new_dcnf.update_nv_from_misc()
     assert new_dcnf.independents == cnf.independents and new_dcnf.ind == cnf.ind
     return new_dcnf
 
@@ -546,7 +554,7 @@ class XOR:
         return set(abs(x) for x in self.atoms)
 
     def count_sat(self, **kwargs):
-        return count_sat(DCNF(from_clauses=self.to_dimacs(max(self.variables()) + 1)).set_ind(self.variables()),
+        return count_sat(DCNF(from_clauses=self.to_dimacs(max(self.variables(), default=0) + 1)).set_ind(self.variables()),
                          **kwargs)
 
 
@@ -564,7 +572,7 @@ class XORs:
         variables = self.variables()
         if self.empty():
             return 1
-        dcnf = DCNF(from_clauses=self.to_dimacs(new_start=max(variables) + 1))
+        dcnf = DCNF(from_clauses=self.to_dimacs(new_start=max(variables, default=0) + 1))
         return count_sat(dcnf.set_ind(variables), **kwargs)
 
     def empty(self) -> bool:

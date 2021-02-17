@@ -769,8 +769,7 @@ class Graph:
             deps, clauses = proc_res.to_dep(rec_child, graph.cnf.nv + 1)
             for dep in deps:
                 graph.cnf.add_dep(dep)
-            graph.cnf.append(clauses)
-
+            graph.cnf.extend(clauses)
         return graph
 
     @classmethod
