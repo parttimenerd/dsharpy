@@ -326,24 +326,19 @@ class RecursionChild:
                               self.constraint | {constraint}, self._cached)
 
 
+@dataclass
 class RecursionNode:
     """
     A node in the recursion graph
     """
-
-    def __init__(self, id: str, acnf: ApplicableCNF, children: List[RecursionChild], fully_over_approximate: bool):
-        """
-        Constructor
-
-        :param id: name of the function (just a unique id used for comparison and hashing)
-        :param acnf: the cnf of this recursion node with inputs, outputs and non recursive deps
-        :param children: recursive calls that lead to aborted recursion in this node
-        :param fully_over_approximate: fully over approximate (don't compute the variability of the inputs)
-        """
-        self.id = id
-        self.acnf = acnf
-        self.children = children
-        self.fully_over_approximate = fully_over_approximate
+    id: str
+    """ name of the function (just a unique id used for comparison and hashing) """
+    acnf: ApplicableCNF
+    """ the cnf of this recursion node with inputs, outputs and non recursive deps """
+    children: List[RecursionChild]
+    """ recursive calls that lead to aborted recursion in this node """
+    fully_over_approximate: bool
+    """ fully over approximate (don't compute the variability of the inputs) """
 
     def __hash__(self):
         return hash(self.id)

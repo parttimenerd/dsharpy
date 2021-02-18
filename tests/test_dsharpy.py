@@ -1,7 +1,7 @@
 import math
 import statistics
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional
 
 import numpy
 import pytest
@@ -371,22 +371,27 @@ def test_global_variables_with_recursion():
     assert math.log2(state.compute()) == 8
 
 
-def test_recursion_without_effect():
+@pytest.mark.parametrize("rec,abstract_rec,expected_deps", [
+    (0, None, 1),
+    (0, 0, 0),  # no deps as the param eq classes can be properly obtained
+    (5, 5, 0)
+])
+def test_recursion_without_effect(rec: int, abstract_rec: Optional[int], expected_deps):
     string = process_code_with_cbmc("""
 
-    bool func(bool H){
-        func(H);
+    bool func(){
+        func();
         return 0;
     }
 
     void main()
     {
-      func(non_det_bool());
+      func();
       END;
     }
-    """, CBMCOptions(rec=0))
+    """, CBMCOptions(rec=rec, abstract_rec=abstract_rec))
     state = State.from_string(string)
-    assert len(state.cnf.deps) == 1
+    assert len(state.cnf.deps) == expected_deps
     assert math.log2(state.compute()) == 0
 
 

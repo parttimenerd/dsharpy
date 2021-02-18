@@ -105,6 +105,7 @@ class Aborted:
             sat_var.sat_var * (1 if is_true else -1) for guard, is_true in self.guards for sat_var in guard.sat_vars
             if sat_var.sat_var)
 
+
 @dataclass(eq=True)
 class LoopIter(Aborted):
     """ Represents the loopt class from CBMC """

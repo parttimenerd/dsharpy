@@ -183,7 +183,7 @@ class CBMCOptions:
     unwind: int = 3
     rec: Optional[int] = None
     """ None: use unwind """
-    abstract_rec: Optional[int] = None
+    abstract_rec: Optional[int] = 0
     """ Use abstract with depth, None: don't use abstract recursion (and the expensive post processing) """
     dep_gen_policy: DepGenerationPolicy = DepGenerationPolicy.FULL_VARS
     preprocess: bool = True

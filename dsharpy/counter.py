@@ -18,7 +18,8 @@ from dsharpy.util import random_seed, has_modified_cbmc, process_path_with_cbmc
 
 @dataclass(frozen=True)
 class Config:
-    parallelism: int = 2
+    parallelism: int = -1
+    """ -1: use all cpus """
     amc_epsilon: float = 0.8
     amc_delta: float = 0.2
     amc_forcesolextension: bool = False
@@ -30,9 +31,12 @@ class Config:
     xor_generator: XORGenerator = field(default_factory=RangeSplitXORGenerator)
     trim: bool = True
 
+    @property
+    def actual_parallelism(self) -> int:
+        return self.parallelism if self.parallelism > 0 else multiprocessing.cpu_count()
+
     def __post_init__(self):
-        rel = math.log2(self.parallelism)
-        assert int(rel) == math.ceil(rel) and rel >= 1
+        assert self.parallelism > 0 or self.parallelism == -1
 
 
 class State:
@@ -146,7 +150,7 @@ class State:
 
     def compute_loop(self, iterations: int) -> float:
         counts: List[float] = []
-        with multiprocessing.Pool() as p:
+        with multiprocessing.Pool(self.config.actual_parallelism) as p:
             counts = list(p.map(self._compute_loop_iter, range(iterations)))
         return median(counts)
 
@@ -176,7 +180,7 @@ def convert_if_necessary(ctx: click.Context, param: str, value: str) -> PathWrap
 Supports DCNF and C/CPP files (if the modified CBMC is installed)
 """)
 @click.argument('file', type=click.Path(exists=True), callback=convert_if_necessary)
-@click.option('-p', '--parallelism', type=int, default=2, help="has to be a power of two larger than one")
+@click.option('-p', '--parallelism', type=int, default=-1, help="-1: use system parallelism, > 0: level of parallelism, other values are unsupported")
 @click.option('--amc_epsilon', type=float, default=0.2)
 @click.option('--amc_delta', type=float, default=0.8)
 @click.option('--amc_forcesolextension', type=bool, default=False)
