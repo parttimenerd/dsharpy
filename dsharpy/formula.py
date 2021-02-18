@@ -76,25 +76,21 @@ class Dep:
 
 Deps = List[Dep]
 
-Independents = List[Set[Tuple[int, int]]]
-
 
 class DCNF(CNF):
 
     def __init__(self, from_file=None, from_fp=None, from_string=None, from_clauses: List[List[int]] = None,
                  from_aiger=None,
-                 ind: Set[int] = None, deps: Deps = None, independents: Independents = None):
+                 ind: Set[int] = None, deps: Deps = None):
         super().__init__(from_file, from_fp, from_string, from_clauses or [], from_aiger, comment_lead=['c'])
         self.ind: Set[int] = set()
         self.deps: Deps = []
         self.comments.append(self.format_ind_comment(ind or set()))
         for dep in deps or []:
             self.comments.append(dep.to_comment())
-        self.independents: Independents = independents or []
         self._update_from_comments(self.comments)
-        assert not self.independents
 
-    def _update_comments(self, new_ind: Iterable[int], new_deps: Deps, new_indies: Independents):
+    def _update_comments(self, new_ind: Iterable[int], new_deps: Deps):
         self.comments.append(self.format_ind_comment(new_ind))
         self.comments.extend(dep.to_comment() for dep in new_deps)
 
@@ -104,12 +100,11 @@ class DCNF(CNF):
 
     def reset_comments(self):
         self._clean_up_comments()
-        self._update_comments(self.ind, self.deps, self.independents)
+        self._update_comments(self.ind, self.deps)
 
-    def _parse_comments(self, comments: List[str]) -> Tuple[Set[int], Deps, Independents]:
+    def _parse_comments(self, comments: List[str]) -> Tuple[Set[int], Deps]:
         ind: Set[int] = set()
         deps: Deps = []
-        indies = []
         for c in comments:
             if not self._is_special_comment(c):
                 continue
@@ -124,25 +119,19 @@ class DCNF(CNF):
                 exit(1)
             if ints[-1] == 0:
                 ints = ints[:-1]
-            if c.startswith("c ind "):
-                ind.update(ints)
-            else:
-                tmp = set()
-                for i in range(0, len(ints), 2):
-                    tmp.add((ints[i], ints[i + 1]))
-                indies.append(tmp)
-        return ind, deps, indies
+            assert c.startswith("c ind ")
+            ind.update(ints)
+        return ind, deps
 
     def _update_from_comments(self, comments: List[str], ignore_self: bool = False):
         if not comments:
             return
         combined = ([] if ignore_self else self.comments) + comments
-        ind, deps, indies = self._parse_comments(combined)
+        ind, deps = self._parse_comments(combined)
         self.comments.clear()
         self.add_ind(*ind)
         for dep in deps:
             self.add_dep(dep)
-        self.independents.extend(indies)
         self.comments.extend(set(x for x in combined if not self._is_special_comment(x)))
 
     def add_ind(self, *ind: int):
@@ -166,7 +155,7 @@ class DCNF(CNF):
 
     @staticmethod
     def _is_special_comment(comment: str) -> bool:
-        return comment.startswith("c ind ") or comment.startswith("c dep ") or comment.startswith("c par ")
+        return comment.startswith("c ind ") or comment.startswith("c dep ")
 
     def from_fp(self, file_pointer, comment_lead=['c']):
         super().from_fp(file_pointer, comment_lead)
@@ -182,7 +171,6 @@ class DCNF(CNF):
         cnf.comments = deepcopy(self.comments)
         cnf.ind = deepcopy(self.ind)
         cnf.deps = deepcopy(self.deps)
-        cnf.independents = deepcopy(self.independents)
         return cnf
 
     def shallow_copy(self) -> 'DCNF':
@@ -192,7 +180,6 @@ class DCNF(CNF):
         cnf.comments = copy(self.comments)
         cnf.ind = copy(self.ind)
         cnf.deps = copy(self.deps)
-        cnf.independents = copy(self.independents)
         return cnf
 
     def really_shallow_copy(self) -> 'DCNF':
@@ -202,7 +189,6 @@ class DCNF(CNF):
         cnf.comments = self.comments
         cnf.ind = self.ind
         cnf.deps = self.deps
-        cnf.independents = self.independents
         return cnf
 
     def weighted(self):
@@ -237,14 +223,14 @@ class DCNF(CNF):
         ret = self.really_shallow_copy()
         ret.deps = deps
         ret.comments.clear()
-        ret._update_comments(self.ind, ret.deps, self.independents)
+        ret._update_comments(self.ind, ret.deps)
         return ret
 
     def set_ind(self, new_ind: Iterable[int]) -> "DCNF":
         ret = self.really_shallow_copy()
         ret.comments.clear()
         ret.ind.clear()
-        ret._update_comments(new_ind, self.deps, self.independents)
+        ret._update_comments(new_ind, self.deps)
         ret.ind = set(new_ind)
         return ret
 
@@ -263,7 +249,6 @@ class DCNF(CNF):
 
         clauses = [[transpose(var) for var in clause] for clause in self.clauses]
         ind = {transpose(i) for i in self.ind}
-        indep = [{(transpose(a), transpose(b)) for a, b in s} for s in self.independents]
         deps: List[Dep] = []
         for dep in self.deps:
             small_map = {}
@@ -271,13 +256,12 @@ class DCNF(CNF):
                 small_map[var] = transpose(var)
             deps.append(transpose_dep(dep, small_map))
         cnf = DCNF(from_clauses=clauses)
-        cnf._update_comments(ind, deps, indep)
+        cnf._update_comments(ind, deps)
         return cnf, mapping
 
     def update_nv_from_misc(self):
-        """ update nv from ind, dep and independents """
-        self.nv = max(self.nv, max(self.ind, default=0), max((dep.max_var() for dep in self.deps), default=0),
-                      max((max(map(max, ind_set), default=0) for ind_set in self.independents), default=0))
+        """ update nv from ind and deps """
+        self.nv = max(self.nv, max(self.ind, default=0), max((dep.max_var() for dep in self.deps), default=0))
 
 
 def blast_xor(variables: List[int], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:
@@ -529,7 +513,11 @@ def trim_dcnf(cnf: DCNF, anchors: Iterable[int] = None) -> DCNF:
     cnf = graph.cnf
     assert isinstance(cnf, DCNF)
     new_cnf = graph.sub_cnf(anchors or cnf.ind, copy_comments=True)
-    new_dcnf = DCNF(from_clauses=new_cnf.clauses, ind=cnf.ind, deps=cnf.deps, independents=cnf.independents)
+    new_dcnf = DCNF(from_clauses=new_cnf.clauses, ind=cnf.ind, deps=cnf.deps)
+    new_dcnf.comments = cnf.comments
+    new_dcnf.update_nv_from_misc()
+    assert new_dcnf.ind == cnf.ind
+    return new_dcnf
     new_dcnf.comments = cnf.comments
     new_dcnf.update_nv_from_misc()
     assert new_dcnf.independents == cnf.independents and new_dcnf.ind == cnf.ind
