@@ -2,6 +2,7 @@
 This module is based on the pysat.formula module to provide a simple interface to CNF formulas with
 D#SAT specific comments.
 """
+import logging
 import math
 import re
 import subprocess
@@ -115,8 +116,7 @@ class DCNF(CNF):
             try:
                 ints = list(int(e) for e in c[6:].split(" "))
             except ValueError as ex:
-                print(c)
-                exit(1)
+                raise ex
             if ints[-1] == 0:
                 ints = ints[:-1]
             assert c.startswith("c ind ")
@@ -339,9 +339,9 @@ def _parse_amc_out(cnf: CNF, out: str, err: str) -> Optional[float]:
         solutions = multiplier * base ** exponent
         return solutions
     except IndexError as ex:
-        print("--- Error ---")
-        print(out)
-        print(err)
+        logging.error("--- Error ---")
+        logging.error(out)
+        logging.error(err)
         cnf.to_fp(sys.stdout)
         return None
 
@@ -398,7 +398,7 @@ def parse_ind_from_comments(cnf: CNF) -> Iterable[int]:
             try:
                 ind.update(set(int(p) for p in comment[6:].split(" ") if p != "0"))
             except BaseException as ex:
-                print(comment, file=sys.stderr)
+                logging.error(comment, file=sys.stderr)
                 raise
     return ind
 

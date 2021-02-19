@@ -1,19 +1,14 @@
+import logging
 import math
 import multiprocessing
-import os
-import shutil
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
 from statistics import median
 from typing import Tuple, Set, List, Optional, Union, Iterable
 
-import click as click
 from pysat.formula import CNF
 
 from dsharpy.formula import count_sat, DCNF, sat, CNFGraph, Dep, trim_dcnf, \
     RangeSplitXORGenerator, XORGenerator, XORs
-from dsharpy.util import random_seed, has_modified_cbmc, process_path_with_cbmc
 
 
 @dataclass(frozen=True)
@@ -26,8 +21,10 @@ class Config:
     log_iterations: bool = True
     epsilon: float = 0.2
     delta: float = 0.8
-    check_xors_for_variability: bool = True
-    """ Check that the added xors lead to the variables having the desired variability in the rest of the program """
+    check_xor_variability: bool = True
+    """ Check that the added xors lead to the variables having the desired variability in the rest of the program,
+        use the xors that are nearest to desired variability """
+    max_xor_retries: int = 10
     xor_generator: XORGenerator = field(default_factory=RangeSplitXORGenerator)
     trim: bool = True
 
@@ -44,6 +41,7 @@ class State:
     def __init__(self, cnf: DCNF, config: Config = None):
         self.cnf = cnf
         self.config = config or Config()
+        self.logger = logging.getLogger("counter")
 
     def can_split(self) -> bool:
         return len(self.cnf.deps) > 0
@@ -122,92 +120,48 @@ class State:
         # we overapproximate the variability
         max_variability_bits = math.log2(dep.max_variability) if dep.max_variability else float("inf")
         available_variability_bits = min(math.log2(available_variability), max_variability_bits)
-        print(f"{dep} (variability: {available_variability_bits:.2f} (max_var: {max_variability_bits:.2f}) bits)")
+        self.logger.info(f"{dep} (variability: {available_variability_bits:.2f} (max_var: {max_variability_bits:.2f}) bits)")
         constraints: XORs = self.create_random_xor_clauses(dep.ret, available_variability_bits)
-        print(f"constraints: {constraints}")
+        self.logger.info(f"constraints: {constraints}")
         new_clauses = constraints.to_dimacs(self.cnf.nv + 1)
 
-        if self.config.check_xors_for_variability:
+        if self.config.check_xor_variability:
+            assert self.config.max_xor_retries > 0
             # only use the xor clauses if they lead to a satisfying variability
-            # Todo: this might never end
             count = 0
-            while count < 10 and (var := self.approximate_variability_of_clauses(new_state.cnf, new_clauses, dep.ret,
-                                                                                 dep.constraint)) != 2 ** min(
-                len(dep.ret),
-                math.ceil(available_variability_bits)):
-                print(f"# {math.log2(var) if var != 0 else 'unsat'} vs {available_variability_bits}")
-                new_clauses = self.create_random_xor_clauses(dep.ret, available_variability_bits).to_dimacs(
-                    self.cnf.nv + 1)
+            possible_constraints: List[Tuple[float, XORs]] = []
+            current_constraints = constraints
+            expected_variability = 2 ** min(len(dep.ret), math.ceil(available_variability_bits))
+            while True:
+                var = self.approximate_variability_of_clauses(new_state.cnf,
+                                                               current_constraints.to_dimacs(self.cnf.nv + 1),
+                                                               dep.ret, dep.constraint)
+                if var == expected_variability:
+                    variability, constraints = var, current_constraints
+                    break
+                if count >= self.config.max_xor_retries:
+                    # find the best constraint
+                    variability, constraints = min(possible_constraints, key=lambda t: abs(t[0] - expected_variability))
+                    break
+                possible_constraints.append((available_variability_bits, current_constraints))
+                current_constraints = self.create_random_xor_clauses(dep.ret, available_variability_bits)
                 count += 1
-        new_state.cnf.extend(new_clauses)
+            self.logger.info(f"# choosing {math.log2(variability) if var != 0 else 'unsat'} vs {available_variability_bits}")
+
+        new_state.cnf.extend(constraints.to_dimacs(self.cnf.nv + 1))
         return new_state.compute()
 
     def _compute_loop_iter(self, num: int) -> float:
         count = self.compute()
         if self.config.log_iterations:
-            print(f"-- run {num:2d}: {count:3f}")
+            self.logger.info(f"-- run {num:2d}: {count:3f}")
         return count
 
     def compute_loop(self, iterations: int) -> float:
         counts: List[float] = []
-        with multiprocessing.Pool(self.config.actual_parallelism) as p:
-            counts = list(p.map(self._compute_loop_iter, range(iterations)))
+        if iterations == 1 or self.config.actual_parallelism:
+            counts = list(map(self._compute_loop_iter, range(iterations)))
+        else:
+            with multiprocessing.Pool(self.config.actual_parallelism) as p:
+                counts = list(p.map(self._compute_loop_iter, range(iterations)))
         return median(counts)
-
-
-@dataclass
-class PathWrapper:
-    path: Path
-    base: Optional[Path] = None
-
-    def __del__(self):
-        if self.base:
-            shutil.rmtree(self.base)
-
-
-def convert_if_necessary(ctx: click.Context, param: str, value: str) -> PathWrapper:
-    file = Path(value)
-    if file.suffix in [".c", ".cpp"]:
-        if not has_modified_cbmc():
-            raise BaseException("Install modified CBMC via update.sh")
-        temp = Path(tempfile.mkdtemp())
-        return PathWrapper(process_path_with_cbmc(file, temp), temp)
-    return PathWrapper(file)
-
-
-@click.command(name="dsharpy", help="""An approximate model counter with dependencies based on ApproxMC
-
-Supports DCNF and C/CPP files (if the modified CBMC is installed)
-""")
-@click.argument('file', type=click.Path(exists=True), callback=convert_if_necessary)
-@click.option('-p', '--parallelism', type=int, default=-1, help="-1: use system parallelism, > 0: level of parallelism, other values are unsupported")
-@click.option('--amc_epsilon', type=float, default=0.2)
-@click.option('--amc_delta', type=float, default=0.8)
-@click.option('--amc_forcesolextension', type=bool, default=False)
-@click.option("-v", "--verbose", type=bool, default=False)
-@click.option("--epsilon", type=float, default=0.2, help="Not yet implemented")
-@click.option("--delta", type=float, default=0.8, help="Not yet implemented")
-@click.option("--random", default=lambda: os.urandom(100))
-@click.option("--iterations", type=int, default=5, help="number of loop iterations")
-def cli(file: PathWrapper, parallelism, amc_epsilon, amc_delta, amc_forcesolextension, verbose,
-        epsilon, delta, random, iterations):
-    import warnings
-    warnings.warn("--epsilon and --delta don't have any effect currently")
-    state = State(DCNF.load(file.path),
-                  Config(parallelism=parallelism,
-                         amc_epsilon=amc_epsilon,
-                         amc_delta=amc_delta,
-                         amc_forcesolextension=amc_forcesolextension,
-                         log_iterations=verbose,
-                         epsilon=epsilon,
-                         delta=delta))
-    random_seed(random)
-    ret = state.compute_loop(iterations)
-    if ret >= 0:
-        print(f"c count {ret}")
-    else:
-        print(f"c unsatisfiable")
-
-
-if __name__ == '__main__':
-    cli()

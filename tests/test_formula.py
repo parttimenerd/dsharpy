@@ -3,7 +3,7 @@ import math
 import pytest
 
 from dsharpy.formula import RangeSplitXORGenerator, FullyRandomXORGenerator, XOR, XORs, blast_xor, \
-    IncrementalRelations, Dep
+    IncrementalRelations, Dep, DCNF, trim_dcnf
 from pysat.formula import CNF
 
 
@@ -68,3 +68,9 @@ def test_incremental_relations():
     ]), [1], [6])
     rels, eqs = inc.compute([Dep({3}, {5})])
     assert rels[1] == [6]
+
+
+def test_trim_with_misc_ind_var():
+    cnf = DCNF().set_ind({1})
+    assert trim_dcnf(cnf).nv == 1
+    assert cnf.comments == ["c ind 1 0"]

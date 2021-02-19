@@ -1,6 +1,7 @@
 """ Utilities not directly related to formulas or CNFs """
 import copy
 import functools
+import logging
 import math
 import os
 import random
@@ -15,7 +16,8 @@ from io import IOBase
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Mapping, Callable, Optional, Deque
+from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Mapping, Callable, Optional, Deque, \
+    Literal
 
 
 def binary_path(program: str) -> Path:
@@ -190,6 +192,8 @@ class CBMCOptions:
     verbose: bool = False
     compute_max_vars: bool = True
     process_graph: Callable[["convert.Graph"], None] = field(default_factory=lambda: (lambda g: None))
+    counter_config: Optional["Config"] = None
+    """ Only used for configuring the max var counter """
 
     def __post_init__(self):
         assert self.unwind >= 3
@@ -263,12 +267,13 @@ def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None,
     from dsharpy import convert
 
     if verbose or options.verbose:
-        print(err)
-        print(cbmc_out)
-        if isinstance(c_file, Path):
+        logging.info(err)
+        logging.info(cbmc_out)
+        if isinstance(c_file, Path) and verbose:
             print(c_file.read_text())
     graph = convert.Graph.parse_graph(cbmc_out.split("\n"), options.dep_gen_policy,
-                                      "__out", use_latest_ind_var=True, compute_max_vars=options.compute_max_vars)
+                                      "__out", use_latest_ind_var=True, compute_max_vars=options.compute_max_vars,
+                                      counter_conf=options.counter_config)
     options.process_graph(graph)
     graph.cnf.to_fp(out)
 
@@ -300,7 +305,6 @@ def build_java(code: str) -> Path:
     tmp_dir2 = Path(tempfile.mkdtemp())
     java_file = tmp_dir2 / "__base_class.java"
     java_file.write_text(code)
-    print(code)
     cmd = f"cd {tmp_dir.absolute()}; javac {java_file.absolute()} -cp {jbmc_models_classpath()} -d ."
     subprocess.check_call(cmd, shell=True)
     return tmp_dir
@@ -314,6 +318,28 @@ def process_code_with_jbmc(code: str, code_type: JavaSourceType = JavaSourceType
     run_cbmc("__base_class", out, options, cbmc_path=modified_cbmc_path().parent / "jbmc",
              misc=["--classpath", f"{jbmc_models_classpath()}:{classpath}"], cwd=classpath)
     return out.getvalue()
+
+
+def detect_file_suffix(content: str) -> Optional[Literal[".java", ".cpp", ".cnf"]]:
+    """
+    Detect a files suffix based on its content.
+
+    Java files contain a Java style main method,
+    CNF files are parseable by DCNF and
+    C/C++ files contain all of "{}();" and a main method with void or int return value.
+    """
+    if "main(String[] args)" in content:
+        return ".java"
+    try:
+        from dsharpy.formula import DCNF
+        DCNF.load_string(content)
+        return ".cnf"
+    except:
+        pass
+    if all(x in content for x in "{}();") and \
+            ("int main(" in content or "void main(" in content):
+        return ".cpp"
+    return None
 
 
 def empty(iterable: Iterable) -> bool:

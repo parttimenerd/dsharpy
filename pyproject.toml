@@ -33,6 +33,6 @@ generate-setup-file = false
 script = "build.py"
 
 [tool.poetry.scripts]
-dsharpy = "dsharpy.counter:cli"
+dsharpy = "dsharpy.cli:cli"
 maxcount = "dsharpy.maxcount.maxcount:cli"
 convert = "dsharpy.convert:cli"

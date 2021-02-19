@@ -213,11 +213,23 @@ void main()
 {
   char b = fib(non_det_char2());
   char __out = b;
-  assert(non_det_char());
+  END;
 }
 """, CBMCOptions(unwind=3, rec=1))
-    val = State.from_string(string, Config(check_xors_for_variability=False)).compute()
+    val = State.from_string(string, Config(check_xor_variability=False)).compute()
     assert val == 256
+
+
+def test_multiple_outputs():
+    string = process_code_with_cbmc("""
+void main()
+{
+  char __out = non_det();
+  char __out2 = non_det();
+  END;
+}
+""", CBMCOptions(unwind=3))
+    assert math.log2(State.from_string(string).compute()) == 16
 
 
 def test_small_loop():
@@ -301,6 +313,7 @@ void main()
     print(lkg)
     assert lkg >= 5  # actual leakage: 5
 
+
 def test_small_loop3():
     string = process_code_with_cbmc("""
 char non_det_char();
@@ -347,7 +360,7 @@ def test_fully_unwindable_loop():
       while (i < 2) { i++; }
       END;
     }
-    """, CBMCOptions(unwind=3, abstract_rec=None))
+    """, CBMCOptions(unwind=3))
     val = math.log2(State.from_string(string).compute())
     assert val == 0
 
@@ -603,7 +616,7 @@ def test_loops_and_recursion_mixed():
         END;
     }
     """, options=CBMCOptions(compute_max_vars=False, rec=0, abstract_rec=0))
-    assert State.from_string(string).compute() >= 128  # actually leaks 2 bit
+    assert State.from_string(string).compute() >= 128  # actually leaks 1 bit
 
 
 def test_basic_java():

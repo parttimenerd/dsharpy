@@ -474,14 +474,13 @@ class Graph:
         return list(self.rec_nodes.values())
 
     def process_recursion_graph(self, consumed: Consumed, dep_policy: DepGenerationPolicy,
-                                compute_max_vars: bool = True) -> RecursionProcessingResult:
-        # todo: currently only uses the default config for variability over approximation
+                                compute_max_vars: bool = True, counter_conf: "Config" = None) -> RecursionProcessingResult:
         from dsharpy.counter import State
         rec = self._create_recursion_graph(consumed)
         state = RecursionProcessingResult(dep_policy)
         DepEqClassesRecursionProcessor(rec, state).run()
         if compute_max_vars:
-            MaxVariabilityRecursionProcessor(rec, lambda c: State(c).compute(), state).run()
+            MaxVariabilityRecursionProcessor(rec, lambda c: State(c, config=counter_conf).compute(), state).run()
         return state
 
     @staticmethod
@@ -723,7 +722,8 @@ class Graph:
 
     @classmethod
     def parse_graph(cls, raw_lines: List[str], dep_policy: DepGenerationPolicy, ind_var_prefix: str = None,
-                    use_latest_ind_var: bool = True, compute_max_vars: bool = True) -> "Graph":
+                    use_latest_ind_var: bool = True, compute_max_vars: bool = True,
+                    counter_conf: "Config" = None) -> "Graph":
         graph = Graph()
         lines = []
         recursion_child_lines: List[str] = []
@@ -765,7 +765,7 @@ class Graph:
 
         consumed = graph.process_loop_iters()
 
-        proc_res = graph.process_recursion_graph(consumed, dep_policy, compute_max_vars)
+        proc_res = graph.process_recursion_graph(consumed, dep_policy, compute_max_vars, counter_conf)
         for rec_child in graph.rec_children:
             deps, clauses = proc_res.to_dep(rec_child, graph.cnf.nv + 1)
             for dep in deps:
@@ -775,8 +775,8 @@ class Graph:
 
     @classmethod
     def process(cls, infile: IOBase, out: IOBase, dep_policy: DepGenerationPolicy, ind_var_prefix: str = None,
-                use_latest_ind_var: bool = True):
-        cls.parse_graph(infile.readlines(), dep_policy, ind_var_prefix, use_latest_ind_var).cnf.to_fp(out)
+                use_latest_ind_var: bool = True, counter_conf: "Config" = None):
+        cls.parse_graph(infile.readlines(), dep_policy, ind_var_prefix, use_latest_ind_var, counter_conf).cnf.to_fp(out)
 
 
 @click.command(name="convert", help="""
