@@ -241,7 +241,7 @@ void main()
     ret, cnf, new_state = state.split()
     available_variability = state._count_sat(cnf)
     assert available_variability == 126
-    assert state.compute() == 128
+    assert state.compute_loop(5) >= 128
 
 
 def test_small_loop_reduced():
@@ -323,7 +323,36 @@ void main()
     assert val >= 128  # todo: correct?
 
 
-@pytest.mark.skip("it takes currently really long")
+def test_a_loop_without_private_input():
+    string = process_code_with_cbmc("""
+    void main()
+    {
+      char i = 0;
+      while (i < 1){
+        i = i << 1;
+      }
+      char __out = i;
+      END;
+    }
+    """, CBMCOptions(unwind=3, abstract_rec=None))
+    val = math.log2(State.from_string(string).compute())
+    assert val == 0
+
+
+def test_fully_unwindable_loop():
+    string = process_code_with_cbmc("""
+    void main()
+    {
+      char i = 0;
+      while (i < 2) { i++; }
+      END;
+    }
+    """, CBMCOptions(unwind=3, abstract_rec=None))
+    val = math.log2(State.from_string(string).compute())
+    assert val == 0
+
+
+@pytest.mark.skip("takes 4 minutes")
 def test_array_in_loop():
     string = process_code_with_cbmc("""
     void main()
@@ -339,6 +368,23 @@ def test_array_in_loop():
     """, CBMCOptions(unwind=3))
     val = math.log2(State.from_string(string).compute())
     assert val == 32
+
+
+def test_array_in_loop_reduced():
+    string = process_code_with_cbmc("""
+    void main()
+    {
+      char arr[10];
+      char S = non_det();
+      for (char i = 0; i < 10; i++){
+        arr[i] = S & i;
+      }
+      char __out = arr[4];
+      END;
+    }
+    """, CBMCOptions(unwind=3))
+    val = math.log2(State.from_string(string).compute())
+    assert val == 8
 
 
 def test_global_variables_with_recursion():
@@ -530,11 +576,10 @@ __out = (num > 1 && num < 9) ? (num ~{max:8}~> unknown) : 0 // this might produc
     assert state.compute() == 9
 
 
-@pytest.mark.skip("takes currently 21:23 minutes on my laptop")
 def test_loops_and_recursion_mixed():
     string = process_code_with_cbmc("""
-    int r(int c){
-        int a = 0;
+    char r(char c){
+        char a = 0;
         while (a < c){
             a++;
             c--;
@@ -542,7 +587,7 @@ def test_loops_and_recursion_mixed():
         return a;
     }   
     
-    int f(int a){
+    char f(char a){
         if (a < 0){
             return f(a + 1);
         }
@@ -550,15 +595,15 @@ def test_loops_and_recursion_mixed():
     }
     
     void main(){
-        int h = non_det_char();
+        char h = non_det_char();
         while (h != f(h)){
             h--;
         }
         char __out = f(h);
         END;
     }
-    """, options=CBMCOptions(compute_max_vars=False))
-    assert State.from_string(string).compute() == 256
+    """, options=CBMCOptions(compute_max_vars=False, rec=0, abstract_rec=0))
+    assert State.from_string(string).compute() >= 128  # actually leaks 2 bit
 
 
 def test_basic_java():
