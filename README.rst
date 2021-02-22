@@ -8,6 +8,8 @@ It might still return a number that is to low.
 
 It can analyse C/C++ and Java code using a modified CBMC as a front end. This includes heavy preprocessing.
 
+See https://www.overleaf.com/read/smkhyhdytccr for more information on the underlying ideas and techniques.
+
 Requirements
 ------------
 - Linux

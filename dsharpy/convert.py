@@ -615,7 +615,7 @@ class Graph:
         #   with condition guard:   # add guard to all deps and rec children
         #       inner part
         #       output' = f(output)
-        #   output'' = guard ? output' : input
+        #   output'' = guard ? output' : output
         #   return output''
         # this is a equivalent to the loop but can be evaluated by the existing recursion graph code
         # → we can throw out all loop handling code besides this transformation

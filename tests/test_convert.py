@@ -54,8 +54,6 @@ void main()
 
 def test_small_loop():
     string = process_code_with_cbmc("""
-char non_det_char();
-
 void main()
 {
   char num = non_det_char();

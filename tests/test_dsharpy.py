@@ -40,7 +40,7 @@ p cnf 0 2
 1 2 0 
 3 4 0
 c ind 4 0
-c dep 2 0 3
+c dep 2 0 3 0
 """
 
 
@@ -65,7 +65,7 @@ def test_basic_program2_computation():
     state = State.from_string("""
 p cnf 0 2
 c ind 2 3 0
-c dep 1 0 2 3
+c dep 1 0 2 3 0
 """)
     arr = [state.compute() for i in range(20)]
     print(arr)
@@ -78,7 +78,7 @@ def test_basic_compute():
 p cnf 0 2
 1 2 0
 c ind 1 2 0
-c dep 2 0 1
+c dep 2 0 1 0
 """
     random_seed(10)
     val = State.from_string(string).compute()
@@ -100,9 +100,6 @@ c dep 2 3 0 1 4 0 0 1 0
 @pytest.mark.skip("I'm unsure what this program should leak")
 def test_recursive_code_unsure():
     string = process_code_with_cbmc("""
-    #include <assert.h>
-    char non_det_char();
-    char non_det_char2();
 char fib(char num){
   if (num > 2)
   {
@@ -113,9 +110,9 @@ char fib(char num){
 
 void main()
 {
-  char b = fib(non_det_char2());
+  char b = fib(non_det_char());
   char __out = b;
-  assert(non_det_char());
+  END;
 }
 """, CBMCOptions(preprocess=False))
     state = State.from_string(string)
@@ -139,7 +136,6 @@ void main()
 
 def test_recursive_code_reduced_with_guard():
     string = process_code_with_cbmc("""
-    #include <assert.h>
 bool fib(bool num){
   if (num)
   {
@@ -168,9 +164,6 @@ void main()
 
 def test_recursive_code():
     string = process_code_with_cbmc("""
-    #include <assert.h>
-    char non_det_char();
-    char non_det_char2();
 char fib(char num){
   if (num > 2)
   {
@@ -181,11 +174,11 @@ char fib(char num){
 
 void main()
 {
-  char b = fib(non_det_char2());
+  char b = fib(non_det_char());
   char __out = b;
-  assert(non_det_char());
+  END;
 }
-""", CBMCOptions(rec=0, preprocess=False))
+""", CBMCOptions(rec=0))
     state = State.from_string(string, Config(amc_epsilon=0.1))
     assert len(state.cnf.deps) == 1
     ret, cnf, new_state = state.split()
@@ -196,8 +189,6 @@ void main()
 
 def test_recursive_code_real_fib():
     string = process_code_with_cbmc("""
-    char non_det_char();
-    char non_det_char2();
 char fib(char num){
   if (num <= 0){
     return 0;
@@ -211,7 +202,7 @@ char fib(char num){
 
 void main()
 {
-  char b = fib(non_det_char2());
+  char b = fib(non_det_char());
   char __out = b;
   END;
 }
@@ -234,18 +225,15 @@ void main()
 
 def test_small_loop():
     string = process_code_with_cbmc("""
-char non_det_char();
-char non_det_char2();
-
 void main()
 {
-  char num = non_det_char2();
+  char num = non_det_char();
   char res = 0;
   while (res < num) {
     res += 1;
   }
   char __out = res;
-  assert(non_det_char());
+  END;
 }
 """, CBMCOptions(unwind=3))
     state = State.from_string(string)
@@ -258,18 +246,15 @@ void main()
 
 def test_small_loop_reduced():
     string = process_code_with_cbmc("""
-char non_det_char();
-char non_det_char2();
-
 void main()
 {
-  char num = non_det_char2();
+  char num = non_det_char();
   char res = 1;
   while (res != num) {
     res = res << 2;
   }
   char __out = res;
-  assert(non_det_char());
+  END;
 }
 """, CBMCOptions(unwind=3, verbose=True))
     state = State.from_string(string)
@@ -284,19 +269,16 @@ void main()
 
 def test_small_loop2():
     string = process_code_with_cbmc("""
-char non_det_char();
-char non_det_char2();
-
 void main()
 {
-  char num = non_det_char2();
+  char num = non_det_char();
   char res = 1;
   while (res < num) {
     res *= 4;
     num *= 2;
   }
   char __out = res;
-  assert(non_det_char());
+  END;
 }
 """, CBMCOptions(dep_gen_policy=DepGenerationPolicy.MULTIPLE_DEP_VARS))
     state = State.from_string(string, config=Config(xor_generator=RangeSplitXORGenerator()))
@@ -316,12 +298,9 @@ void main()
 
 def test_small_loop3():
     string = process_code_with_cbmc("""
-char non_det_char();
-char non_det_char2();
-
 void main()
 {
-  char num = non_det_char2();
+  char num = non_det_char();
   char res = 1;
   while (res < num) {
     res *= 4;
@@ -329,7 +308,7 @@ void main()
     num *= res == 2 ? 3 : 1;
   }
   char __out = res;
-  assert(non_det_char());
+  END;
 }
 """)
     val = State.from_string(string).compute()
@@ -437,7 +416,6 @@ def test_global_variables_with_recursion():
 ])
 def test_recursion_without_effect(rec: int, abstract_rec: Optional[int], expected_deps):
     string = process_code_with_cbmc("""
-
     bool func(){
         func();
         return 0;
