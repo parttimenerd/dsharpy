@@ -556,8 +556,8 @@ class XORs:
     def variables(self) -> Set[int]:
         return set(x for xor in self.xors for x in xor.variables())
 
-    def count_sat(self, **kwargs) -> int:
-        variables = self.variables()
+    def count_sat(self, all_vars: List[int] = None, **kwargs) -> int:
+        variables = all_vars or self.variables()
         if self.empty():
             return 1
         dcnf = DCNF(from_clauses=self.to_dimacs(new_start=max(variables, default=0) + 1))
@@ -596,14 +596,26 @@ class FullyRandomXORGenerator(OverapproxXORGenerator):
     """
     Idea:
      Generate $restricted_bits$ number of XOR clauses that contain each variable with probability 0.5
+
+    This uses the hash function proposed by Meel et al. for ApproxMC
     """
 
     def _create_random_xor(self, variables: List[int]) -> XOR:
-        return XOR([v for v in variables if random_bool()]).randomize()
+        return XOR([v for v in variables if random_bool()])
 
     def _generate(self, variables: List[int], variability: int) -> XORs:
         restricted_bits = len(variables) - variability
         return XORs([self._create_random_xor(variables) for i in range(restricted_bits)])
+
+
+class FullyRandomXORGenerator2(FullyRandomXORGenerator):
+    """
+    Idea:
+     Generate $restricted_bits$ number of XOR clauses that contain each variables with a random signum
+    """
+
+    def _create_random_xor(self, variables: List[int]) -> XOR:
+        return XOR([v for v in variables]).randomize()
 
 
 class RangeSplitXORGenerator(OverapproxXORGenerator):

@@ -8,7 +8,7 @@ from typing import Tuple, Set, List, Optional, Union, Iterable
 from pysat.formula import CNF
 
 from dsharpy.formula import count_sat, DCNF, sat, CNFGraph, Dep, trim_dcnf, \
-    RangeSplitXORGenerator, XORGenerator, XORs
+    XORGenerator, XORs, FullyRandomXORGenerator
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ class Config:
     """ Check that the added xors lead to the variables having the desired variability in the rest of the program,
         use the xors that are nearest to desired variability """
     max_xor_retries: int = 10
-    xor_generator: XORGenerator = field(default_factory=RangeSplitXORGenerator)
+    xor_generator: XORGenerator = field(default_factory=FullyRandomXORGenerator)
     trim: bool = True
 
     @property
