@@ -145,6 +145,12 @@ def has_modified_cbmc() -> bool:
         return False
 
 
+def mis_path() -> Path:
+    p = binary_path("mis")
+    assert (p / "muser2-dir/src/tools/muser2/muser2").exists(), "muser has to be compiled, use ./update.sh"
+    return p / "mis.py"
+
+
 class DepGenerationPolicy(Enum):
     """
     Policy for generating deps, important for multiple returns/outputs, else all are equivalent to SINGLE_DEP

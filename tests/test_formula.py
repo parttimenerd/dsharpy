@@ -3,7 +3,7 @@ import math
 import pytest
 
 from dsharpy.formula import RangeSplitXORGenerator, FullyRandomXORGenerator, XOR, XORs, blast_xor, \
-    IncrementalRelations, Dep, DCNF, trim_dcnf
+    IncrementalRelations, Dep, DCNF, trim_dcnf, mis
 from pysat.formula import CNF
 
 
@@ -73,3 +73,13 @@ def test_trim_with_misc_ind_var():
     cnf = DCNF().set_ind({1})
     assert trim_dcnf(cnf).nv == 1
     assert cnf.comments == ["c ind 1 0"]
+
+
+def test_mis():
+    cnf = CNF(from_clauses=[
+        [1, 2],
+        [2, 3],
+        [3, 4]
+    ])
+    cnf.comments = ["c ind 2 3 4 0"]
+    return len(mis(cnf)) < 3

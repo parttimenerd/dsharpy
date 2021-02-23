@@ -2,3 +2,6 @@
 	path = util/cbmc
 	url = git@git.scc.kit.edu:gp1285/cbmc.git
 	branch = dsharpy
+[submodule "util/mis"]
+	path = util/mis
+	url = https://github.com/meelgroup/mis

@@ -29,7 +29,6 @@ Outputs the resulting DCNF.
                                                                 "> 0: level of parallelism, other values are unsupported")
 @click.option('--amc_epsilon', type=float, default=0.2)
 @click.option('--amc_delta', type=float, default=0.8)
-@click.option('--amc_forcesolextension', type=bool, default=False)
 @click.option("--epsilon", type=float, default=0.2, help="Not yet implemented")
 @click.option("--delta", type=float, default=0.8, help="Not yet implemented")
 @click.option("--check_xor_variability", type=int, default=10,
@@ -42,7 +41,7 @@ Outputs the resulting DCNF.
 @click.option('--abstract_rec', type=int, default=0, help="-1: don't use it, >= 0: with depth")
 @click.option('--dep_gen_policy', type=DepGenerationPolicy, default=DepGenerationPolicy.FULL_VARS)
 @click.option('--compute_max_vars', type=bool, default=False)
-def cli(file, verbose: bool, random: float, parallelism, amc_epsilon, amc_delta, amc_forcesolextension,
+def cli(file, verbose: bool, random: float, parallelism, amc_epsilon, amc_delta,
         epsilon, delta, check_xor_variability, iterations, only_convert, out,
         unwind, abstract_rec, dep_gen_policy, compute_max_vars):
     logging.warning("--epsilon and --delta don't have any effect currently")
@@ -51,7 +50,6 @@ def cli(file, verbose: bool, random: float, parallelism, amc_epsilon, amc_delta,
     config = Config(parallelism=parallelism,
                     amc_epsilon=amc_epsilon,
                     amc_delta=amc_delta,
-                    amc_forcesolextension=amc_forcesolextension,
                     log_iterations=verbose,
                     epsilon=epsilon,
                     delta=delta,

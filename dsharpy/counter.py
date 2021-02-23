@@ -17,7 +17,6 @@ class Config:
     """ -1: use all cpus """
     amc_epsilon: float = 0.8
     amc_delta: float = 0.2
-    amc_forcesolextension: bool = False
     log_iterations: bool = True
     epsilon: float = 0.2
     delta: float = 0.8
@@ -27,6 +26,9 @@ class Config:
     max_xor_retries: int = 10
     xor_generator: XORGenerator = field(default_factory=FullyRandomXORGenerator)
     trim: bool = True
+    use_mis: bool = False
+    """ Use meelgroup/mis to reduce the ind sets for model counting,
+        doesn't seem to improve the results, only slows the analysis down by a factor > 2 """
 
     @property
     def actual_parallelism(self) -> int:
@@ -82,16 +84,15 @@ class State:
     def from_string(cls, string: str, config: Config = None) -> 'State':
         return State(DCNF.load_string(string), config or Config())
 
-    def count_sat(self, cnf: CNF, ind: Set[int]) -> Union[List[Optional[float]], Optional[float]]:
+    def count_sat(self, cnf: CNF, ind: Set[int]) -> Optional[float]:
         """ Helpful for debugging """
         dcnf = DCNF(from_clauses=cnf.clauses)
         return self._count_sat(dcnf.set_ind(ind))
 
-    def _count_sat(self, cnf: Union[List[CNF], CNF]) -> Union[List[Optional[float]], Optional[float]]:
+    def _count_sat(self, cnf: CNF) -> Optional[float]:
         return count_sat(cnf, epsilon=self.config.amc_epsilon,
                          delta=self.config.amc_delta,
-                         forcesolextension=self.config.amc_forcesolextension,
-                         trim=self.config.trim)
+                         trim=self.config.trim, use_mis=self.config.use_mis)
 
     def create_random_xor_clauses(self, variables: Iterable[int], available_variability: float) -> XORs:
         """ Create an xor clause that restricts the variable of the passed vars to 2^{passed bits} (on average) """

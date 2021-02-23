@@ -19,7 +19,7 @@ from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, FrozenSet
 from pysat.formula import CNF
 
 from dsharpy.data_structures import UnionFind
-from dsharpy.util import binary_path, empty, random_bool, random_split, ints_with_even_bit_count
+from dsharpy.util import binary_path, empty, random_bool, random_split, ints_with_even_bit_count, mis_path
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,7 @@ class Dep:
 
 Deps = List[Dep]
 
+Ind = Set[int]
 
 class DCNF(CNF):
 
@@ -84,7 +85,7 @@ class DCNF(CNF):
                  from_aiger=None,
                  ind: Set[int] = None, deps: Deps = None):
         super().__init__(from_file, from_fp, from_string, from_clauses or [], from_aiger, comment_lead=['c'])
-        self.ind: Set[int] = set()
+        self.ind: Ind = set()
         self.deps: Deps = []
         self.comments.append(self.format_ind_comment(ind or set()))
         for dep in deps or []:
@@ -329,6 +330,16 @@ def sat(cnf: CNF) -> bool:
                                            shell=True).decode().splitlines()[0] == "s SATISFIABLE"
 
 
+def mis(cnf: CNF) -> Ind:
+    """ Compute the minimal independent set using meelgroup/mis """
+    with NamedTemporaryFile() as f:
+        cnf.to_file(f.name)
+        last_line = subprocess.check_output(f"{mis_path()} --useind {f.name}", shell=True,
+                                            cwd=str(mis_path().parent)).decode().splitlines()[-1]
+        assert last_line.startswith("c")
+        return set(map(int, last_line[len("c ind "):].split(" ")[:-1]))
+
+
 def _parse_amc_out(cnf: CNF, out: str, err: str) -> Optional[float]:
     try:
         [mul_base, exponent] = re.split("\\*\\*|\\^", out.split("Number of solutions is:")[1])
@@ -346,52 +357,41 @@ def _parse_amc_out(cnf: CNF, out: str, err: str) -> Optional[float]:
         return None
 
 
-def count_sat(cnfs: Union[List[CNF], CNF], epsilon: float = 0.8, delta: float = 0.2, forcesolextension: bool = False,
-              trim: bool = True) \
-        -> Union[List[Optional[float]], Optional[float]]:
+def count_sat(cnf: CNF, epsilon: float = 0.8, delta: float = 0.2, trim: bool = True, use_mis: bool = False) \
+        -> Optional[float]:
     """
-    Run ApproxMC with the passed parameters. If multiple CNFs are passed, then these are executed in parallel.
+    Run ApproxMC with the passed parameters
+
+    :param trim: trim the cnf?
+    :param use_mis: use meelgroup/mis to compute the minimal ind set after trimming,
+                    seems not to change the result, only to decrease performance
     """
     options = {
         "epsilon": epsilon,
-        "delta": delta,
-        "forcesolextension": int(forcesolextension)
+        "delta": delta
     }
-    is_single = isinstance(cnfs, CNF)
-    if is_single:
-        cnfs = [cnfs]
     try:
-        with tempfile.TemporaryDirectory() as folder:
-            files = []
-            used_cnfs = []
-            for i, cnf in enumerate(cnfs):
-                file = f"{folder}/{i}.cnf"
-                if trim:
-                    cnf = CNFGraph(cnf).sub_cnf()
-                used_cnfs.append(cnf)
-                cnf.to_file(file)
-                # cnf.to_fp(sys.stdout)
-                files.append(file)
-            processes = [subprocess.Popen(
-                f"{binary_path('approxmc4')} {file} {' '.join(f'--{k} {v}' for k, v in options.items())}",
-                shell=True,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for file in files]
-            ret = []
-            for i, process in enumerate(processes):
-                out, err = process.communicate()
-                if "error" in err.decode() or "permission denied" in err.decode():
-                    raise BaseException(f"ApproxMC error: {err.decode()}")
-                ret.append(_parse_amc_out(used_cnfs[i], out.decode(), err.decode()))
-            return ret[0] if is_single else ret
+        with tempfile.NamedTemporaryFile(suffix=".cnf") as file:
+            if trim:
+                cnf = CNFGraph(cnf).sub_cnf()
+            if use_mis:
+                new_ind = mis(cnf)
+                cnf = set_ind(cnf, new_ind)
+            cnf.to_file(file.name)
+            # cnf.to_fp(sys.stdout)
+            process = subprocess.Popen(
+                    f"{binary_path('approxmc4')} {file.name} {' '.join(f'--{k} {v}' for k, v in options.items())}",
+                    shell=True,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = process.communicate()
+            if "error" in err.decode() or "permission denied" in err.decode():
+                raise BaseException(f"ApproxMC error: {err.decode()}")
+            return _parse_amc_out(cnf, out.decode(), err.decode())
     except:
-        # fall bock onto the old ApproxMC
-        # if _use_newest:
-        #     return count_sat(cnfs, epsilon=epsilon, delta=delta, forcesolextension=forcesolextension,
-        #                      _use_newest=False)
         raise
 
 
-def parse_ind_from_comments(cnf: CNF) -> Iterable[int]:
+def parse_ind_from_comments(cnf: CNF) -> Ind:
     ind: Set[int] = set()
     for comment in cnf.comments:
         if comment.startswith("c ind "):
@@ -401,6 +401,23 @@ def parse_ind_from_comments(cnf: CNF) -> Iterable[int]:
                 logging.error(comment, file=sys.stderr)
                 raise
     return ind
+
+
+def get_ind(cnf: CNF) -> Ind:
+    if isinstance(cnf, DCNF):
+        return cnf.ind
+    return parse_ind_from_comments(cnf)
+
+
+def set_ind(cnf: CNF, new_ind: Ind) -> CNF:
+    if isinstance(cnf, DCNF):
+        return cnf.set_ind(new_ind)
+    ind: Set[int] = set()
+    new_cnf = CNF(from_clauses=cnf.clauses)
+    new_cnf.comments = [c for c in cnf.comments if not c.startswith("c ind ")]
+    new_cnf.comments.append(DCNF.format_ind_comment(new_ind))
+    new_cnf.nv = cnf.nv
+    return new_cnf
 
 
 class CNFGraph:

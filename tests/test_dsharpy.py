@@ -30,11 +30,6 @@ def test_dncf_counting():
     assert count_sat(cnf) == 3
 
 
-def test_count_multiple():
-    """ Count the models of multiple formulas """
-    assert len(count_sat([load("test1.cnf"), load("test2.cnf")])) == 2
-
-
 BASIC_PROGRAM = """
 p cnf 0 2
 1 2 0 
