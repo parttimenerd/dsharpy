@@ -10,7 +10,7 @@ from pysat.formula import CNF
 def test_xor_reduce_variability_by_one_ranged():
     generator = RangeSplitXORGenerator()
     vars = [1, 2, 3, 4, 5, 6]
-    xors = generator.generate(vars, len(vars) - 1)
+    xors = generator.generate(vars, 2 **(len(vars) - 1))
     print(xors)
     assert math.log2(xors.count_sat()) == len(vars) - 1
 
@@ -18,7 +18,7 @@ def test_xor_reduce_variability_by_one_ranged():
 def test_xor_reduce_variability_by_one_fully():
     generator = FullyRandomXORGenerator()
     vars = [1, 2, 3, 4, 5, 6]
-    xors = generator.generate(vars, len(vars) - 1)
+    xors = generator.generate(vars, 2**(len(vars) - 1))
     print(xors)
     assert math.log2(xors.count_sat(vars)) == len(vars) - 1
 

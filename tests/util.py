@@ -1,7 +1,11 @@
+import logging
 from pathlib import Path
 from typing import Set, Union, FrozenSet
 
 from dsharpy.formula import DCNF, Deps
+
+
+logging.basicConfig(level=logging.INFO)
 
 
 def load(name: str) -> DCNF:

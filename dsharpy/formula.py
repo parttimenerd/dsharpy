@@ -14,12 +14,15 @@ from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, FrozenSet, Dict, Callable
+from typing import List, Set, Tuple, Optional, Iterable, Deque, FrozenSet, Dict, Callable
 
 from pysat.formula import CNF
 
 from dsharpy.data_structures import UnionFind
 from dsharpy.util import binary_path, empty, random_bool, random_split, ints_with_even_bit_count, mis_path
+
+Clause = List[int]
+Clauses = List[Clause]
 
 
 @dataclass(frozen=True)
@@ -74,10 +77,16 @@ class Dep:
     def add_constraint(self, constraint: int) -> "Dep":
         return Dep(self.ret, self.param, self.constraint | {constraint}, self.fully_over_approximate)
 
+    def max_variability_of_ret(self) -> float:
+        """ Returns the upper bound for the variability of the the return of this dep """
+        return min(2 ** min(len(self.param), len(self.ret)),
+                   self.max_variability if self.max_variability else float("inf"))
+
 
 Deps = List[Dep]
 
 Ind = Set[int]
+
 
 class DCNF(CNF):
 
@@ -627,7 +636,7 @@ class XORGenerator:
     def generate(self, variables: List[int], variability: float) -> XORs:
         """
         Generate a list of xors which constraint the variables, so that the resulting variability
-        of the variables + constraints is in bits as given, but at maximum len(variables)
+        of the variables + constraints is at maximum 2^len(variables)
         """
         pass
 
@@ -635,10 +644,10 @@ class XORGenerator:
 class OverapproxXORGenerator(XORGenerator):
 
     def generate(self, variables: List[int], variability: float) -> XORs:
-        return self._generate(variables, min(math.ceil(variability), len(variables)))
+        return self._generate(variables, min(math.ceil(math.log2(variability)), len(variables)))
 
     @abstractmethod
-    def _generate(self, variables: List[int], variability: int) -> XORs:
+    def _generate(self, variables: List[int], variability_bits: int) -> XORs:
         pass
 
 
@@ -653,8 +662,8 @@ class FullyRandomXORGenerator(OverapproxXORGenerator):
     def _create_random_xor(self, variables: List[int]) -> XOR:
         return XOR([v for v in variables if random_bool()])
 
-    def _generate(self, variables: List[int], variability: int) -> XORs:
-        restricted_bits = len(variables) - variability
+    def _generate(self, variables: List[int], variability_bits: int) -> XORs:
+        restricted_bits = len(variables) - variability_bits
         return XORs([self._create_random_xor(variables) for i in range(restricted_bits)])
 
 
@@ -674,6 +683,6 @@ class RangeSplitXORGenerator(OverapproxXORGenerator):
      Split variable set into $restricted_bits$ disjoint subsets, each of them will become an XOR
     """
 
-    def _generate(self, variables: List[int], variability: int) -> XORs:
+    def _generate(self, variables: List[int], variability_bits: int) -> XORs:
         return XORs(
-            [XOR(part).randomize() for part in random_split(variables, len(variables) - variability, min_size=1)])
+            [XOR(part).randomize() for part in random_split(variables, len(variables) - variability_bits, min_size=1)])

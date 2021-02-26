@@ -3,7 +3,7 @@ import math
 import multiprocessing
 from dataclasses import dataclass, field
 from statistics import median
-from typing import Tuple, Set, List, Optional, Union, Iterable
+from typing import Tuple, Set, List, Optional, Iterable, FrozenSet
 
 from pysat.formula import CNF
 
@@ -29,6 +29,11 @@ class Config:
     use_mis: bool = False
     """ Use meelgroup/mis to reduce the ind sets for model counting,
         doesn't seem to improve the results, only slows the analysis down by a factor > 2 """
+    variability_in_all_places: bool = True   # todo: find better name
+    """
+    don't fixate variables, but add the XOR constraints for each dep.ret on every count
+    essentially: use the algorithm descripted in the tech report
+    """
 
     @property
     def actual_parallelism(self) -> int:
@@ -38,14 +43,19 @@ class Config:
         assert self.parallelism > 0 or self.parallelism == -1
 
 
+P = Tuple[FrozenSet[int], float]
+Ps = List[P]
+
+
 class State:
 
-    def __init__(self, cnf: DCNF, config: Config = None, dep_relations: RelatedDeps = None):
+    def __init__(self, cnf: DCNF, config: Config = None, dep_relations: RelatedDeps = None, prev_counts: Ps = None):
         self.cnf = cnf
         self.dep_relations = dep_relations or RelatedDeps(cnf)
-        # if dep_relations is None:
-        #     print(self.dep_relations)
+        if dep_relations is None:
+            print(self.dep_relations)
         self.config = config or Config()
+        self.prev_counts = prev_counts or []
         self.logger = logging.getLogger("counter")
 
     def can_split(self) -> bool:
@@ -76,7 +86,7 @@ class State:
             header_cnf.append([guard])
         remaining_state = State(
             trim_dcnf(self.cnf.set_deps([idep for idep in self.cnf.deps if dep != idep])),
-            self.config, self.dep_relations)  # dep relations don't change
+            self.config, self.dep_relations, list(self.prev_counts))  # dep relations don't change
         return CNFGraph(header_cnf).sub_cnf(), remaining_state
 
     def split(self) -> Tuple[Dep, CNF, "State"]:
@@ -97,63 +107,79 @@ class State:
                          delta=self.config.amc_delta,
                          trim=self.config.trim, use_mis=self.config.use_mis)
 
-    def create_random_xor_clauses(self, variables: Iterable[int], available_variability: float) -> XORs:
-        """ Create an xor clause that restricts the variable of the passed vars to 2^{passed bits} (on average) """
-        return self.config.xor_generator.generate(list(variables), available_variability)
-
-    def approximate_variability_of_clauses(self, cnf: DCNF, new_clauses: List[List[int]], ind: Iterable[int],
-                                           constraints: Set[int] = None) -> float:
-        new_cnf = CNF(from_clauses=cnf.clauses + new_clauses + [[constraint] for constraint in (constraints or [])])
-        new_cnf.nv = max(cnf.nv, new_cnf.nv)
-        new_cnf.comments = [DCNF.format_ind_comment(ind)]
-        return self._count_sat(new_cnf)
+    def count_sat_fully(self, cnf: CNF) -> float:
+        """ Count SAT with prev_counts to XORs if present """
+        if not self.config.variability_in_all_places or not self.prev_counts:
+            return self._count_sat(cnf)
+        l: List[float] = []
+        for i in range(1):
+            cnf_copy = cnf.copy()
+            for vars, count in self.prev_counts:
+                cnf_copy.extend(self.create_random_xor_clauses_possibly_checked(vars, count).to_dimacs(self.cnf.nv + 1))
+            l.append(self._count_sat(cnf_copy))
+        return median(l)
 
     def compute(self) -> float:
         """ Approximately compute the model count with respect to the dependencies """
         if not self.can_split():
             """ no splitting needed, ends the recursion """
-            return self._count_sat(self.cnf)
+            return self.count_sat_fully(self.cnf)
         dep, cnf, new_state = self.split()
-        available_variability: float = 2 ** min(len(dep.param),
-                                                len(dep.ret)) if dep.fully_over_approximate else self._count_sat(cnf)
+        if self.config.variability_in_all_places:
+            self.logger.info(f"computing {dep} under the constraint of {[math.log2(v) for d, v in self.prev_counts]}")
+        available_variability: float = min(dep.max_variability_of_ret(),
+                                           float("inf") if dep.fully_over_approximate else self.count_sat_fully(cnf))
 
         if available_variability == 0:  # this is most likely due to the constraints being unsatisfiable
             assert not sat(cnf)
             return new_state.compute()
+        if self.config.variability_in_all_places:
+            new_state.prev_counts.append((dep.ret, available_variability))
+        else:
+            new_state.cnf.extend(self.create_random_xor_clauses_possibly_checked(dep.ret, available_variability)
+                                 .to_dimacs(self.cnf.nv + 1))
 
-        # we overapproximate the variability
-        max_variability_bits = math.log2(dep.max_variability) if dep.max_variability else float("inf")
-        available_variability_bits = min(math.log2(available_variability), max_variability_bits)
-        self.logger.info(f"{dep} (variability: {available_variability_bits:.2f} (max_var: {max_variability_bits:.2f}) bits)")
-        constraints: XORs = self.create_random_xor_clauses(dep.ret, available_variability_bits)
-        self.logger.info(f"constraints: {constraints}")
-        new_clauses = constraints.to_dimacs(self.cnf.nv + 1)
-
-        if self.config.check_xor_variability:
-            assert self.config.max_xor_retries > 0
-            # only use the xor clauses if they lead to a satisfying variability
-            count = 0
-            possible_constraints: List[Tuple[float, XORs]] = []
-            current_constraints = constraints
-            expected_variability = 2 ** min(len(dep.ret), math.ceil(available_variability_bits))
-            while True:
-                var = self.approximate_variability_of_clauses(new_state.cnf,
-                                                               current_constraints.to_dimacs(self.cnf.nv + 1),
-                                                               dep.ret, dep.constraint)
-                if var == expected_variability:
-                    variability, constraints = var, current_constraints
-                    break
-                if count >= self.config.max_xor_retries:
-                    # find the best constraint
-                    variability, constraints = min(possible_constraints, key=lambda t: abs(t[0] - expected_variability))
-                    break
-                possible_constraints.append((available_variability_bits, current_constraints))
-                current_constraints = self.create_random_xor_clauses(dep.ret, available_variability_bits)
-                count += 1
-            self.logger.info(f"# choosing {math.log2(variability) if var != 0 else 'unsat'} vs {available_variability_bits}")
-
-        new_state.cnf.extend(constraints.to_dimacs(self.cnf.nv + 1))
         return new_state.compute()
+
+    def create_random_xor_clauses_possibly_checked(self, variables: Iterable[int], available_variability: float) -> XORs:
+        self.logger.info(f"{variables} (variability: {math.log2(available_variability):.2f} bits")
+        if self.config.check_xor_variability:
+            constraints = self.create_random_xor_clauses_checked(variables, available_variability)
+        else:
+            constraints = self.create_random_xor_clauses(variables, available_variability)
+        self.logger.info(f"constraints: {constraints}")
+        print(f"constraints {constraints}")
+        return constraints
+
+    def create_random_xor_clauses(self, variables: Iterable[int], available_variability: float) -> XORs:
+        """
+        Create an xor clause that restricts the variable of the passed vars to the available variability
+        (on average)
+        """
+        return self.config.xor_generator.generate(list(variables), available_variability)
+
+    def create_random_xor_clauses_checked(self, variables: Iterable[int], available_variability: float) -> XORs:
+        assert self.config.max_xor_retries > 0
+        # only use the xor clauses if they lead to a satisfying variability
+        count = 0
+        possible_constraints: List[Tuple[float, XORs]] = []
+        current_constraints = self.create_random_xor_clauses(variables, available_variability)
+        while True:
+            # todo: unsure whether or not using the cnf and constraints here would be appropriate, I tend to think not
+            var = self.count_sat(CNF(from_clauses=current_constraints.to_dimacs(self.cnf.nv + 1)), ind=variables)
+            if (var is None and available_variability == 0) or (var is not None and round(var) == round(available_variability)):
+                variability, constraints = var, current_constraints
+                break
+            if count >= self.config.max_xor_retries:
+                # find the best constraint
+                variability, constraints = min(possible_constraints, key=lambda t: abs(t[0] - available_variability))
+                break
+            possible_constraints.append((var, current_constraints))
+            current_constraints = self.create_random_xor_clauses(variables, available_variability)
+            count += 1
+        #self.logger.info(
+        #    f"# choosing {math.log2(variability) if var != 0 else 'unsat'} vs {available_variability}")
+        return constraints
 
     def _compute_loop_iter(self, num: int) -> float:
         count = self.compute()
@@ -162,7 +188,6 @@ class State:
         return count
 
     def compute_loop(self, iterations: int) -> float:
-        counts: List[float] = []
         if iterations == 1 or self.config.actual_parallelism:
             counts = list(map(self._compute_loop_iter, range(iterations)))
         else:

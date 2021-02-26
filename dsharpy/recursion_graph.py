@@ -12,11 +12,8 @@ from dataclasses import dataclass, field
 from typing import List, Mapping, Iterator, Dict, Set, MutableMapping, Optional, Callable, Deque, Iterable, FrozenSet, \
     Tuple, Union
 
-from dsharpy.formula import Deps, Dep, count_sat, DCNF, IncrementalRelations
+from dsharpy.formula import Deps, Dep, count_sat, DCNF, IncrementalRelations, Clause, Clauses
 from dsharpy.util import DepGenerationPolicy
-
-Clause = List[int]
-Clauses = List[Clause]
 
 Variable = Union[int, bool]
 """ variables might be all integers except 0 and booleans """
