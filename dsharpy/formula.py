@@ -9,12 +9,12 @@ import subprocess
 import sys
 import tempfile
 from abc import abstractmethod
-from collections import deque
+from collections import deque, defaultdict
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, FrozenSet, Dict
+from typing import List, Set, Tuple, Optional, Union, Iterable, Deque, FrozenSet, Dict, Callable
 
 from pysat.formula import CNF
 
@@ -462,16 +462,53 @@ class CNFGraph:
 Relations = Tuple[Dict[int, List[int]], List[List[int]]]
 
 
-def init_union_find_from_cnf(cnf: CNF, eq_classes: List[List[int]] = None) -> UnionFind:
+def init_union_find_from_cnf(cnf: CNF, eq_classes: List[List[int]] = None,
+                             dep_handler: Callable[[Dep, UnionFind], None] = lambda d, uf: uf.union_many(d.vars(), True)) \
+        -> UnionFind:
     uf = UnionFind(max(cnf.nv, max(map(max, eq_classes or []), default=0)) + 1, 1)
     for eq_class in eq_classes or []:
         uf.union_many(eq_class, True)
     if cnf.clauses:
-        uf.union_many(cnf.clauses, True)
+        for clause in cnf.clauses:
+            uf.union_many(clause, True)
     if isinstance(cnf, DCNF):
         for dep in cnf.deps:
-            uf.union_many(dep.vars(), True)
+            dep_handler(dep, uf)
     return uf
+
+
+class RelatedDeps:
+    """
+    Find deps that affect some variables (affect = the variables are directly related to dep.ret)
+    """
+
+    def __init__(self, dcnf: DCNF):
+        self.dcnf = dcnf
+        self.dep_to_num: Dict[Dep, int] = {dep:i for i, dep in enumerate(dcnf.deps)}
+
+        def dep_handler(dep: Dep, uf: UnionFind):
+            if dep.ret:
+                uf.union_many(list(dep.ret), True)
+            if dep.param:
+                uf.union_many(list(dep.param), True)
+
+        self.uf = init_union_find_from_cnf(dcnf, dep_handler=dep_handler)
+        self.root_to_deps: Dict[int, List[Dep]] = defaultdict(list)
+        for dep in dcnf.deps:
+            if not dep.empty():
+                r = self.uf.find(next(iter(dep.ret)), True)
+                if r >= 0:
+                    self.root_to_deps[r].append(dep)
+
+    def related_deps(self, vars: Iterable[int]) -> Set[Dep]:
+        """ Returns the deps that affect the passed vars directly """
+        return {dep for r in self.uf.roots_of(set(vars), True) for dep in self.root_to_deps[r]}
+
+    def deps_related_to_dep(self, dep: Dep) -> Set[Dep]:
+        return {d for d in self.related_deps(dep.param | dep.constraint) if d != dep}
+
+    def __str__(self):
+        return "\n".join(f"{self.dep_to_num[dep]} {dep}: {' '.join(str(self.dep_to_num[d]) for d in self.deps_related_to_dep(dep))}" for dep in self.dcnf.deps)
 
 
 def find_related(cnf: CNF, start: Set[int], end: Set[int],
@@ -534,10 +571,6 @@ def trim_dcnf(cnf: DCNF, anchors: Iterable[int] = None) -> DCNF:
     new_dcnf.comments = cnf.comments
     new_dcnf.update_nv_from_misc()
     assert new_dcnf.ind == cnf.ind
-    return new_dcnf
-    new_dcnf.comments = cnf.comments
-    new_dcnf.update_nv_from_misc()
-    assert new_dcnf.independents == cnf.independents and new_dcnf.ind == cnf.ind
     return new_dcnf
 
 

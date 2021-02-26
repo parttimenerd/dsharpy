@@ -8,7 +8,7 @@ from typing import Tuple, Set, List, Optional, Union, Iterable
 from pysat.formula import CNF
 
 from dsharpy.formula import count_sat, DCNF, sat, CNFGraph, Dep, trim_dcnf, \
-    XORGenerator, XORs, FullyRandomXORGenerator
+    XORGenerator, XORs, FullyRandomXORGenerator, RelatedDeps
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,11 @@ class Config:
 
 class State:
 
-    def __init__(self, cnf: DCNF, config: Config = None):
+    def __init__(self, cnf: DCNF, config: Config = None, dep_relations: RelatedDeps = None):
         self.cnf = cnf
+        self.dep_relations = dep_relations or RelatedDeps(cnf)
+        # if dep_relations is None:
+        #     print(self.dep_relations)
         self.config = config or Config()
         self.logger = logging.getLogger("counter")
 
@@ -73,7 +76,7 @@ class State:
             header_cnf.append([guard])
         remaining_state = State(
             trim_dcnf(self.cnf.set_deps([idep for idep in self.cnf.deps if dep != idep])),
-            self.config)
+            self.config, self.dep_relations)  # dep relations don't change
         return CNFGraph(header_cnf).sub_cnf(), remaining_state
 
     def split(self) -> Tuple[Dep, CNF, "State"]:

@@ -3,7 +3,7 @@ import math
 import pytest
 
 from dsharpy.formula import RangeSplitXORGenerator, FullyRandomXORGenerator, XOR, XORs, blast_xor, \
-    IncrementalRelations, Dep, DCNF, trim_dcnf, mis
+    IncrementalRelations, Dep, DCNF, trim_dcnf, mis, RelatedDeps
 from pysat.formula import CNF
 
 
@@ -83,3 +83,40 @@ def test_mis():
     ])
     cnf.comments = ["c ind 2 3 4 0"]
     return len(mis(cnf)) < 3
+
+
+def test_related_deps():
+    cnf = DCNF.load_string("""
+1 2 0
+c dep 1 2 0 3 0
+3 4 0
+c dep 4 0 5 0
+5 3 6 0
+c dep 6 0 10 0
+""")
+    rd = RelatedDeps(cnf)
+    for r, deps in rd.root_to_deps.items():
+        print(f"root {r}: {set(map(lambda d: rd.dep_to_num[d], deps))}")
+    nums = lambda v: set(map(lambda d: rd.dep_to_num[d], (rd.related_deps({v}) if isinstance(v, int) else rd.deps_related_to_dep(v))))
+    assert nums(5) == {0, 1}
+    assert nums(4) == {0, 1}
+    assert nums(cnf.deps[1]) == {0}
+    assert nums(cnf.deps[2]) == {0, 1}
+    assert nums(cnf.deps[0]) == set()
+
+
+def test_related_deps2():
+    cnf = DCNF.load_string("""
+1 2
+c dep 1 2 0 3 0
+3 4 0
+c dep 4 0 5 0
+5 6 0
+c dep 6 0 10 0
+""")
+    rd = RelatedDeps(cnf)
+    for r, deps in rd.root_to_deps.items():
+        print(f"root {r}: {set(map(lambda d: rd.dep_to_num[d], deps))}")
+    nums = lambda v: set(map(lambda d: rd.dep_to_num[d], (rd.related_deps({v}) if isinstance(v, int) else rd.deps_related_to_dep(v))))
+    assert nums(6) == {1}
+    assert nums(cnf.deps[2]) == {1}

@@ -27,8 +27,9 @@ cdef class UnionFind:
     cdef vector[int] rank
     cdef int _n_sets
     cdef int start
+    cdef bool verbose
 
-    def __cinit__(self, int n_points, int start = 0):
+    def __cinit__(self, int n_points, int start = 0, bool verbose = False):
         self.n_points = n_points
         self.start = start
         self.parent.resize(n_points)
@@ -39,6 +40,7 @@ cdef class UnionFind:
             self.parent[i] = i
             self.rank[i] = 1
         self._n_sets = n_points - self.start
+        self.verbose = verbose
 
     def valid_index(self, int i) -> bool:
         return self.start <= abs(i) < self.n_points
@@ -60,6 +62,8 @@ cdef class UnionFind:
     def union_many(self, list multiple, bool ignore_invalid = False) -> int:
         """
         Build the union of multiple elements (accepts list [of lists, …] of ints), -1 if all invalid
+
+        :returns the root of the joined elements
         """
 
         assert len(multiple) > 0
@@ -81,6 +85,8 @@ cdef class UnionFind:
             if root_j == -1:
                 continue
             if root_i != root_j:
+                if self.verbose:
+                    print(f"union of {root_i} and {root_j}")
                 self._n_sets -= 1
                 if self.rank[root_i] < self.rank[root_j]:
                     self.parent[root_i] = root_j
@@ -137,6 +143,9 @@ cdef class UnionFind:
         uf.parent = vector[int](self.parent)
         return uf
 
+    def roots_of(self, set vars, bool ignore_invalid = False) -> "Set[int]":
+        return {self.find(var, ignore_invalid) for var in vars}
+
     cdef int _find(self, int i):
         """ without range checks """
         # uses path halving by Tarjan (see https://en.wikipedia.org/wiki/Disjoint-set_data_structure)
@@ -156,3 +165,10 @@ cdef class UnionFind:
     property n_points:
         def __get__(self):
             return self.n_points
+
+    property verbose:
+        def __get__(self):
+            return self.verbose
+
+        def __set__(self, bool verbose):
+            self.verbose = verbose
