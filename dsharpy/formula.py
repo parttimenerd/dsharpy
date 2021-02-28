@@ -12,14 +12,16 @@ from abc import abstractmethod
 from collections import deque, defaultdict
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
+from functools import reduce
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import List, Set, Tuple, Optional, Iterable, Deque, FrozenSet, Dict, Callable
+from typing import List, Set, Tuple, Optional, Iterable, Deque, FrozenSet, Dict, Callable, Union
 
 from pysat.formula import CNF
 
 from dsharpy.data_structures import UnionFind
-from dsharpy.util import binary_path, empty, random_bool, random_split, ints_with_even_bit_count, mis_path
+from dsharpy.util import binary_path, empty, random_bool, random_split, ints_with_even_bit_count, mis_path, \
+    ints_with_uneven_bit_count
 
 Clause = List[int]
 Clauses = List[Clause]
@@ -274,6 +276,10 @@ class DCNF(CNF):
         self.nv = max(self.nv, max(self.ind, default=0), max((dep.max_var() for dep in self.deps), default=0))
 
 
+Literal = Union[bool, int]
+
+
+def blast_xor(variables: List[Literal], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:
 def blast_xor(variables: List[int], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:
     """
     Blast the xor of the passed vars.
@@ -290,22 +296,34 @@ def blast_xor(variables: List[int], new_start: int, cutting_number: Optional[int
     Its Applications to Approximate Model Counting" by Soos et al,
     the underlying paper for cryptominisat that is used in ApproxMC)
 
-    :param variables: variables with signs to construct an xor from
+    :param variables: variables with signs to construct an xor from (also supports True and False)
     :param new_start: starting id for new variables
     :param cutting_number: maximum number of variables in the xors that are actually blasted without being split
+    todo: handling of booleans might be incorrect
     """
     assert cutting_number is None or cutting_number > 2
     if len(variables) <= 1:
+        variable = variables[0]
+        if variable is True:
+            return []
+        elif variable is False:
+            return [[]]
         return [variables]
+    variables, bools = [v for v in variables if not isinstance(v, bool)], \
+                       [v for v in variables if isinstance(v, bool)]
+    bool_prefix = reduce(lambda x, y: x ^ y, bools, False)
     if cutting_number is None or len(variables) <= cutting_number:
         clauses = []
-        for i in ints_with_even_bit_count(2 ** len(variables)):
+        for i in (ints_with_even_bit_count(2 ** len(variables))
+                  if not bool_prefix
+                  else ints_with_uneven_bit_count(2 ** len(variables))):
             clause = []
             for variable in variables:
                 clause.append((1 if i & 0b1 else -1) * variable)
                 i //= 2
             clauses.append(clause)
         return clauses
+    variables = [bool_prefix] + variables
     assert new_start > 0
     # we split the xor into smallers xors
     clauses = []
@@ -585,24 +603,30 @@ def trim_dcnf(cnf: DCNF, anchors: Iterable[int] = None) -> DCNF:
 
 @dataclass(frozen=True)
 class XOR:
-    atoms: List[int]
+    literals: List[Literal]
 
     def to_dimacs(self, new_start: int) -> List[List[int]]:
-        return blast_xor(self.atoms, new_start)
+        return blast_xor(self.literals, new_start)
 
     def __str__(self) -> str:
-        return "⊻".join(map(str, self.atoms))
+        return "⊻".join(map(str, self.literals))
 
     def randomize(self) -> "XOR":
         """ Randomize the signs of the variables """
-        return XOR([(-1 if random_bool() else 1) * v for v in self.atoms])
+        return XOR([(-1 if random_bool() else 1) * v for v in self.literals])
 
     def variables(self) -> Set[int]:
-        return set(abs(x) for x in self.atoms)
+        return set(abs(x) for x in self.literals)
 
     def count_sat(self, **kwargs):
         return count_sat(DCNF(from_clauses=self.to_dimacs(max(self.variables(), default=0) + 1)).set_ind(self.variables()),
                          **kwargs)
+
+    def xor(self, b: bool) -> "XOR":
+        assert b in [True, False]
+        if not self.literals:
+            return XOR([b])
+        return XOR([(1 if i % 2 == 0 else -1) * l for i, l in enumerate(self.literals)]) if b else self
 
 
 @dataclass(frozen=True)
@@ -620,10 +644,10 @@ class XORs:
         if self.empty():
             return 1
         dcnf = DCNF(from_clauses=self.to_dimacs(new_start=max(variables, default=0) + 1))
-        return count_sat(dcnf.set_ind(variables), **kwargs)
+        return round(count_sat(dcnf.set_ind(variables), **kwargs))
 
     def empty(self) -> bool:
-        return all(not len(xor.atoms) for xor in self.xors)
+        return all(not len(xor.literals) for xor in self.xors)
 
     def __str__(self):
         return " ∧ ".join(map(str, self.xors))
@@ -656,25 +680,20 @@ class FullyRandomXORGenerator(OverapproxXORGenerator):
     Idea:
      Generate $restricted_bits$ number of XOR clauses that contain each variable with probability 0.5
 
-    This uses the hash function proposed by Meel et al. for ApproxMC
+    This uses the hash function proposed by Meel et al. for ApproxMC:
+
+    A H(n,m,3) hash function with m = restricted bits: E[|Cell size|] = R_x / 2^m, n = number of variables to consider
     """
 
-    def _create_random_xor(self, variables: List[int]) -> XOR:
-        return XOR([v for v in variables if random_bool()])
+    def _h_xor(self, m: int, y: List[int]) -> XORs:
+        assert len(y) and m > 0
+        n = len(y)
+        a = random_bool
+        return XORs([XOR([y[k] for k in range(n) if a()]).xor(a()) for i in range(1, m + 1)])
 
     def _generate(self, variables: List[int], variability_bits: int) -> XORs:
         restricted_bits = len(variables) - variability_bits
-        return XORs([self._create_random_xor(variables) for i in range(restricted_bits)])
-
-
-class FullyRandomXORGenerator2(FullyRandomXORGenerator):
-    """
-    Idea:
-     Generate $restricted_bits$ number of XOR clauses that contain each variables with a random signum
-    """
-
-    def _create_random_xor(self, variables: List[int]) -> XOR:
-        return XOR([v for v in variables]).randomize()
+        return self._h_xor(restricted_bits, variables)
 
 
 class RangeSplitXORGenerator(OverapproxXORGenerator):

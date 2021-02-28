@@ -375,6 +375,12 @@ def ints_with_even_bit_count(max_int: int) -> List[int]:
     return [i for i in range(max_int + 1) if bit_count(i) % 2 == 0]
 
 
+@functools.lru_cache()
+def ints_with_uneven_bit_count(max_int: int) -> List[int]:
+    """ Ints with even bit count, up to max_int (inclusive) """
+    return [i for i in range(max_int + 1) if bit_count(i) % 2 == 1]
+
+
 K = TypeVar("K")
 V = TypeVar("V")
 
