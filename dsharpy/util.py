@@ -63,7 +63,10 @@ class SecretRandom(SourceOfRandomness):
         return secrets.randbelow(max + 1)
 
 
-randomness = RandomRandom()
+# todo: implement random based on random.Random and real random bits (advance in it, start at random position, wrap around)
+
+
+randomness = SecretRandom()
 
 
 def random_int(min: int, max: int):
@@ -196,7 +199,8 @@ class CBMCOptions:
     dep_gen_policy: DepGenerationPolicy = DepGenerationPolicy.FULL_VARS
     preprocess: bool = True
     verbose: bool = False
-    compute_max_vars: bool = True
+    compute_max_vars: bool = False
+    """ currently not supported with guarantees """
     process_graph: Callable[["convert.Graph"], None] = field(default_factory=lambda: (lambda g: None))
     counter_config: Optional["Config"] = None
     """ Only used for configuring the max var counter """

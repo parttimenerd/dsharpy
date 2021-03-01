@@ -537,6 +537,30 @@ class RelatedDeps:
     def __str__(self):
         return "\n".join(f"{self.dep_to_num[dep]} {dep}: {' '.join(str(self.dep_to_num[d]) for d in self.deps_related_to_dep(dep))}" for dep in self.dcnf.deps)
 
+    def limited(self) -> "LimitedRelatedDeps":
+        return LimitedRelatedDeps(self)
+
+
+class LimitedRelatedDeps:
+    """ Without an instance of the UnionFind data structure (parallelization…) works fors deps and ind """
+
+    def __init__(self, rd: RelatedDeps):
+        self.dcnf = rd.dcnf
+        self.dep_to_num: Dict[Dep, int] = rd.dep_to_num
+        self._related_deps: Dict[FrozenSet[int], Set[Dep]] = \
+            {(dep.param | dep.constraint): rd.deps_related_to_dep(dep) for dep in self.dcnf.deps}
+        self._related_deps[frozenset(self.dcnf.ind)] = rd.related_deps(self.dcnf.ind)
+
+    def related_deps(self, vars: Iterable[int]) -> Set[Dep]:
+        """ Returns the deps that affect the passed vars directly """
+        return self._related_deps[frozenset(vars)]
+
+    def deps_related_to_dep(self, dep: Dep) -> Set[Dep]:
+        return {d for d in self.related_deps(dep.param | dep.constraint) if d != dep}
+
+    def limited(self) -> "LimitedRelatedDeps":
+        return self
+
 
 def find_related(cnf: CNF, start: Set[int], end: Set[int],
                  eq_classes: List[List[int]] = None) -> Relations:
