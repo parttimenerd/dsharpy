@@ -3,8 +3,7 @@ Build abstract versions of loops and recursion, to find basic invariants that ca
 computation.
 
 Currently with only recursion abstractions, as loop abstraction is far more difficult
-(and not done in my masters thesis) and doesn't seem to have that much benefit
-in relation with the required effort.
+and loops can be handled by converting them into semantically equivalent recursive functions.
 """
 from abc import abstractmethod, ABC
 from collections import defaultdict, deque

@@ -72,11 +72,11 @@ class CountResult:
 
     @property
     def lower_epsilon(self) -> float:
-        return self.variability / self.range[0] - 1
+        return self.variability / (self.range[0] + 0.0000000001) - 1
 
     @property
     def upper_epsilon(self) -> float:
-        return self.range[1] / self.variability - 1
+        return self.range[1] / (self.variability + 0.0000000001) - 1
 
     @property
     def epsilon(self) -> float:
@@ -155,24 +155,40 @@ class PriorDepKnowledge:
         """
         dep_to_count: Dict[Dep, CountResult] = {}
         dep_order = dep_order.copy()
-        epsilon = assume_epsilon or self.guarantees.epsilon
+        epsilon = assume_epsilon if assume_epsilon is not None else self.guarantees.epsilon
 
-        def compute(val: float, related_deps: Set[Dep]) -> CountResult:
+        def compute(val: float, max_val: float, related_deps: Set[Dep]) -> CountResult:
+            """
+            Compute the probability and range of the passed value, that depends on the passed other deps.
+
+            Considers only the related deps that are already processed in the dep order.
+
+            Computing the probability: takes saturation into account
+            """
             related = [dep_to_count[d] for d in related_deps if d in dep_to_count]
             prob = reduce(lambda x, y: x * y,
-                          [dep_to_count[d] for d in related_deps if d in dep_to_count and not d.fully_over_approximate],
+                          [dep_to_count[d].prob for d in related_deps if d in dep_to_count and not d.fully_over_approximate],
                           self.guarantees.probability ** 2)
-            # todo: keep an eye on fully over approx!!!
-            l, h = []
-
-            return CountResult(self.dep_max[dep], prob, (l, h))
+            p_l, p_h = val + sum(d.range[0] - d.variability for d in related), \
+                       val + sum(d.range[1] - d.variability for d in related)
+            l, h = p_l / (1 + epsilon), p_h * (1 + epsilon)
+            if l <= 0 and h >= max_val:
+                prob = 1
+                l, h = 0, max_val
+            return CountResult(val, prob, (l, h))
 
         while not dep_order.empty():
             dep = next(dep_order)
-            dep_to_count[dep] = compute(self.dep_max[dep], self.dep_relations.deps_related_to_dep(dep))
-        return compute(self.ind_max, self.dep_relations.related_deps(dep_order.ind))
+            dep_to_count[dep] = compute(self.dep_max[dep], dep.max_variability_of_ret(),
+                                        self.dep_relations.deps_related_to_dep(dep))
+        ret = compute(self.ind_max, 2 ** len(self.dep_relations.dcnf.ind),
+                      self.dep_relations.related_deps(dep_order.ind))
+        print(f"{epsilon:0.3f}: {ret.epsilon}")
+        return ret
 
     def required_prob(self, ind_res: CountResult, desired_prob: float) -> float:
+        if ind_res.prob > self.guarantees.probability:
+            return self.guarantees.probability
         times_prob_multiplied = math.log(ind_res.prob, self.guarantees.probability)
         return math.pow(desired_prob, 1 / times_prob_multiplied)
 
@@ -183,8 +199,8 @@ class PriorDepKnowledge:
         return current_epsilon
 
     def required_delta_and_epsilon(self, dep_order: DepOrder, desired: EpsilonDelta) -> EpsilonDelta:
-        return EpsilonDelta(1 - self.required_prob(self.compute_count_approx(dep_order), desired.probability),
-                            self.required_epsilon(dep_order, desired.epsilon))
+        return EpsilonDelta(self.required_epsilon(dep_order, desired.epsilon),
+                            1 - self.required_prob(self.compute_count_approx(dep_order), desired.probability))
 
 
     @classmethod

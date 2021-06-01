@@ -1,5 +1,9 @@
 An approximate model counter with dependencies. This is an extension of #SAT to support loop approximations in QIFC.
 
+**TL;DR: This repo contains a python layer for the output of the modified CBMC version https://git.scc.kit.edu/gp1285/cbmc, the
+initial aim was to develop an extension of #SAT, but this ran into theoretical difficulties. This repositories
+can be the starting point for further research.**
+
 This is based on ApproxMC (and the related research). It uses AMC as an oracle by default.
 
 Work in progress (and it is unclear whether it really works).
@@ -13,6 +17,10 @@ See https://www.overleaf.com/read/smkhyhdytccr for more information on the under
 Requirements
 ------------
 - Linux
+
+License
+-------
+MIT
 
 Installation
 ------------
@@ -71,13 +79,3 @@ be specified via
 
 
 Attention: It is only a really rough modification of the original code
-
-
-TODO
-----
-- using the passed epsilon and delta values to compute the amc_epsilon, the amc_delta and the number of iterations
-- larger test cases
-- implement new algorithms
-    - more randomization
-- test maxcount
-- documentation

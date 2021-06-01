@@ -3,13 +3,13 @@ import math
 import multiprocessing
 from dataclasses import dataclass, field
 from statistics import median
-from typing import Tuple, Set, List, Optional, Iterable, FrozenSet, Dict, Iterator
+from typing import Tuple, Set, List, Optional, Iterable,  Callable
 
 from pysat.formula import CNF
 
 from dsharpy.formula import count_sat, DCNF, sat, CNFGraph, Dep, trim_dcnf, \
     XORGenerator, XORs, FullyRandomXORGenerator, RelatedDeps
-from dsharpy.stats import CountResult, Ps, P, EpsilonDelta, PriorDepKnowledge, DepOrder
+from dsharpy.stats import CountResult, Ps, EpsilonDelta, PriorDepKnowledge, DepOrder
 
 
 @dataclass(frozen=True)
@@ -19,8 +19,8 @@ class Config:
     amc_epsilon: float = 0.8
     amc_delta: float = 0.2
     log_iterations: bool = True
-    epsilon: float = 0.2
-    delta: float = 0.8
+    epsilon: float = 0.8
+    delta: float = 0.2
     check_xor_variability: bool = True
     """ Check that the added xors lead to the variables having the desired variability in the rest of the program,
         use the xors that are nearest to desired variability """
@@ -36,7 +36,7 @@ class Config:
     don't fixate variables, but add the XOR constraints for each dep.ret on every count
     essentially: use the algorithm described in the tech report
     """
-    adhere_to_guarantees: bool = False
+    adhere_to_guarantees: bool = True
     """ Slows it down """
     shuffle_dep_order: bool = False
 
@@ -58,12 +58,20 @@ class Config:
 
 @dataclass
 class _ComputeIter:
+    """
+    Externalizes the compute iterations for a given state, used by the method
+    count_sat_fully. It is used to implement a parallel version.
+    """
 
     cnf: CNF
     guarantees: EpsilonDelta
     parallelism: int
+    """ 1 == no parallelism """
     iterations: int
+    """ number of iterations """
     state: "State"
+    """ state that offers the prev_counts """
+    combination_func: Callable[[Iterable[float]], float] = median
 
     def compute(self) -> float:
         l: List[float] = []
@@ -73,16 +81,15 @@ class _ComputeIter:
         else:
             with multiprocessing.Pool(self.parallelism) as pool:
                 l = list(pool.map(self._count_sat_fully_iter, range(self.iterations)))
-        return max(l)
+        return self.combination_func(l)
 
     def _count_sat_fully_iter(self, *args) -> float:
         cnf_copy = self.cnf.copy()
         for p in self.state.prev_counts:
             cnf_copy.extend(
                 self.state.create_random_xor_clauses_possibly_checked(p.dep.ret, float(p)).to_dimacs(self.cnf.nv + 1))
-        res = self.state._count_sat(cnf_copy)
+        res = self.state.count_sat(cnf_copy)
         return res or 0
-
 
 
 class State:
@@ -99,7 +106,8 @@ class State:
         self.sub_guarantees = self.config.initial_amc_guarantees
         if not prior_knowledge and self.config.adhere_to_guarantees:
             self.prior_knowledge = PriorDepKnowledge.create(self.dep_relations,
-                                                            self._count_sat, self.config.initial_amc_guarantees)
+                                                            lambda ind, con: self.count_sat(self.cnf, ind, con),
+                                                            self.config.initial_amc_guarantees)
 
     def can_split(self) -> bool:
         return len(self.cnf.deps) > 0
@@ -141,9 +149,11 @@ class State:
     def from_string(cls, string: str, config: Config = None) -> 'State':
         return State(DCNF.load_string(string), config or Config())
 
-    def count_sat(self, cnf: CNF, ind: Set[int], constraints: Set[int] = None, guarantees: EpsilonDelta = None)\
+    def count_sat(self, cnf: CNF, ind: Set[int] = None, constraints: Set[int] = None, guarantees: EpsilonDelta = None)\
             -> Optional[float]:
         guarantees = guarantees or self.config.initial_amc_guarantees
+        if ind is None and constraints is None:
+            return self._count_sat(cnf, guarantees)
         dcnf = DCNF(from_clauses=cnf.clauses)
         if constraints:
             dcnf.extend([[c] for c in constraints])
@@ -180,7 +190,7 @@ class State:
         if self.config.adhere_to_guarantees and not sub_guarantees:
             # compute the sub delta and epsilon
             sub_guarantees = self.prior_knowledge.required_delta_and_epsilon(dep_order, self.config.guarantees)
-            self.logger.info(f"sub guarantees have to be ε={sub_guarantees.epsilon} and ẟ={sub_guarantees.delta} "
+            print(f"sub guarantees have to be ε={sub_guarantees.epsilon} and ẟ={sub_guarantees.delta} "
                              f"(results in {self._compute_iterations(sub_guarantees)} rounds each)")
         sub_guarantees = sub_guarantees or self.config.initial_amc_guarantees
 
@@ -256,15 +266,16 @@ class State:
         #    f"# choosing {math.log2(variability) if var != 0 else 'unsat'} vs {available_variability}")
         return constraints
 
-    def _compute_loop_iter(self, num: int) -> float:
-        count = self.compute(parallelism=1)
+    def _compute_loop_iter(self, num: int, sub_parallelism: int = 1) -> float:
+        count = self.compute(parallelism=sub_parallelism)
         if self.config.log_iterations:
             self.logger.info(f"-- run {num:2d}: {count:3f}")
         return count
 
     def compute_loop(self, iterations: int) -> float:
-        if iterations == 1 or self.config.actual_parallelism:
-            counts = list(map(self._compute_loop_iter, range(iterations)))
+        if iterations == 1 or self.config.actual_parallelism == 1:
+            counts = list(map(lambda num: self._compute_loop_iter(num, self.config.actual_parallelism),
+                              range(iterations)))
         else:
             with multiprocessing.Pool(self.config.actual_parallelism) as p:
                 counts = list(p.map(self._compute_loop_iter, range(iterations)))

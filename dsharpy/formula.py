@@ -280,7 +280,6 @@ Literal = Union[bool, int]
 
 
 def blast_xor(variables: List[Literal], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:
-def blast_xor(variables: List[int], new_start: int, cutting_number: Optional[int] = 4) -> List[List[int]]:
     """
     Blast the xor of the passed vars.
     Only use it for small number of vars.
@@ -710,7 +709,7 @@ class FullyRandomXORGenerator(OverapproxXORGenerator):
     """
 
     def _h_xor(self, m: int, y: List[int]) -> XORs:
-        assert len(y) and m > 0
+        assert len(y) and (m + 1) > 0
         n = len(y)
         a = random_bool
         return XORs([XOR([y[k] for k in range(n) if a()]).xor(a()) for i in range(1, m + 1)])

@@ -1,5 +1,5 @@
 """
-Convert the --dimacs output of the modified CBMC
+Parse the DIMACS output of the modified CBMC and convert it into a DCNF formula
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -39,6 +39,7 @@ T = TypeVar("T")
 
 
 class VarNode:
+    """ Represents a CBMC variable with associated SAT variables """
 
     def __init__(self, name: str, sat_vars: List[Node], raw_sat: List[str]):
         self.name = name
@@ -159,6 +160,10 @@ class LoopIterNode:
 
 
 class Graph:
+    """
+    A graph for a given DCNF with relations between clauses, variables and
+    aborted loop iterations and recursions
+    """
 
     def __init__(self):
         self.cnf = DCNF()

@@ -62,7 +62,7 @@ p cnf 0 2
 c ind 2 3 0
 c dep 1 0 2 3 0
 """)
-    arr = [state.compute() for i in range(20)]
+    arr = [state.compute() for i in range(5)]
     print(arr)
     assert numpy.mean(arr) >= 2
     assert numpy.median(arr) == 2
