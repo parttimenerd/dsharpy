@@ -8,6 +8,9 @@ import random
 import secrets
 import subprocess
 import tempfile
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from _typeshed import ReadableBuffer
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -16,8 +19,11 @@ from io import IOBase
 from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from types import TracebackType
 from typing import TypeVar, List, Tuple, Set, Union, Sequence, Any, Iterable, Mapping, Callable, Optional, Deque, \
-    Literal
+    Literal, Type, Iterator
+
+T = TypeVar("T")
 
 
 def binary_path(program: str) -> Path:
@@ -118,9 +124,74 @@ def random_shuffle(l: List[T]) -> List[T]:
     return shuffled
 
 
+class NullIO(IOBase):
+
+    def writelines(self, __lines: Iterable["ReadableBuffer"]) -> None:
+        pass
+
+    def __iter__(self) -> Iterator[bytes]:
+        return iter([])
+
+    def __next__(self) -> bytes:
+        return bytes()
+
+    def __enter__(self: T) -> T:
+        return self
+
+    def __exit__(self, exc_type: Optional[Type[BaseException]], exc_val: Optional[BaseException],
+                 exc_tb: Optional[TracebackType]) -> Optional[bool]:
+        return super().__exit__(exc_type, exc_val, exc_tb)
+
+    def close(self) -> None:
+        pass
+
+    def fileno(self) -> int:
+        return -1
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+    def readable(self) -> bool:
+        return True
+
+    def readlines(self, __hint: int = ...) -> List[bytes]:
+        return []
+
+    def seek(self, __offset: int, __whence: int = ...) -> int:
+        return 0
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return 0
+
+    def truncate(self, __size: Optional[int] = ...) -> int:
+        return 0
+
+    def writable(self) -> bool:
+        return True
+
+    def readline(self, __size: Optional[int] = ...) -> bytes:
+        return bytes()
+
+    def __del__(self) -> None:
+        pass
+
+    @property
+    def closed(self) -> bool:
+        return False
+
+    def _checkClosed(self, msg: Optional[str] = ...) -> None:
+        pass
+
+
 def pprint(x: Any):
     import prettyprinter
-    prettyprinter.install_extras(exclude=['django', 'ipython', 'ipython_repr_pretty'])
+    prettyprinter.install_extras(exclude=['ipython', 'ipython_repr_pretty'])
     prettyprinter.pprint(x)
 
 
@@ -243,19 +314,31 @@ def preprocess_c_code(c_code: str) -> str:
     return "\n".join(new_lines_to_add + lines)
 
 
-def process_with_cbmc(c_file: Path, out: IOBase, options: CBMCOptions = None):
+def process_with_cbmc(c_file: Path, out: IOBase, options: CBMCOptions = None) -> "Graph":
     options = options or CBMCOptions()
     if options.preprocess:
         with NamedTemporaryFile(suffix=c_file.suffix) as f:
             f.write(preprocess_c_code(c_file.read_text()).encode())
             f.flush()
-            run_cbmc(Path(f.name), out, options)
+            return run_cbmc(Path(f.name), out, options)
     else:
-        run_cbmc(c_file, out, options)
+        return run_cbmc(c_file, out, options)
+
+
+def process_code_to_graph(c_code: str, options: CBMCOptions = None,
+                           file_ending: str = ".cpp") -> "Graph":
+    options = options or CBMCOptions()
+    with NamedTemporaryFile(suffix=file_ending) as f:
+        print(preprocess_c_code(c_code))
+        f.write(preprocess_c_code(c_code).encode() if options.preprocess else c_code)
+        f.flush()
+        return run_cbmc(Path(f.name), NullIO(), options, create_cnf=False)
+
 
 
 def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None, cbmc_path: Path = modified_cbmc_path(),
-             misc: List[str] = None, cwd: Path = None, verbose: bool = False, use_latest_ind_var: bool = True):
+             misc: List[str] = None, cwd: Path = None, verbose: bool = False, use_latest_ind_var: bool = True,
+             create_cnf: bool = True) -> "Graph":
     options = options or CBMCOptions()
     env = os.environ.copy()
     if options.rec is not None:
@@ -285,7 +368,9 @@ def run_cbmc(c_file: Union[Path, str], out: IOBase, options: CBMCOptions = None,
                                       "__out", use_latest_ind_var=True, compute_max_vars=options.compute_max_vars,
                                       counter_conf=options.counter_config)
     options.process_graph(graph)
-    graph.cnf.to_fp(out)
+    if create_cnf:
+        graph.cnf.to_fp(out)
+    return graph
 
 
 class JavaSourceType(Enum):

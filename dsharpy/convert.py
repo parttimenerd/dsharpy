@@ -1,20 +1,64 @@
 """
 Parse the DIMACS output of the modified CBMC and convert it into a DCNF formula
 """
-from collections import defaultdict
+import re
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from io import IOBase
-from typing import List, Set, Iterable, Optional, TypeVar, Dict, Tuple, Union, FrozenSet, Mapping
+from typing import List, Set, Iterable, Optional, TypeVar, Dict, Tuple, Union, FrozenSet, Mapping, Deque
 
 import click
 
-from dsharpy.formula import DCNF, Dep
+from dsharpy.formula import DCNF, Dep, Deps
 from dsharpy.recursion_graph import NameMapping, RecursionNode, RecursionProcessingResult, \
     MaxVariabilityRecursionProcessor, \
     RecursionChild, ApplicableCNF, Clause, parse_variable, NodeStore, DepEqClassesRecursionProcessor, Variables
 from dsharpy.util import bfs, DepGenerationPolicy
 
 Origin = Union[Dep, RecursionChild, int]
+
+
+class MethodRegexpBuilder:
+
+    def __init__(self, name: str, param_types: Optional[str] = None):
+        self.name = name
+        self.param_types = param_types
+
+    def method_base_regexp(self) -> str:
+        return f"{self.name}\\(.*\\)" if not self.param_types else f"{self.name}\\({','.join(self.param_types)}\\)"
+
+    def param_regexp(self, name: str) -> str:
+        return f"{self.method_base_regexp()}::{name}!.*#1"
+
+    def return_regexp(self) -> str:
+        return f"{self.method_base_regexp()}#return_value!.*#1"
+
+    def method_all_regexp(self) -> str:
+        return f"{self.method_base_regexp()}#.*"
+
+
+def method_regexp(name: str, param_types: Optional[str] = None, *, return_value: bool = False, param: str = None):
+    """
+    Creates a regexp for CBMC var names
+
+    :param name:
+    :param param_types:
+    :param return_value:
+    :param param: param name (or regexp), "return_value" is equal to passing return_value=True
+    :return: regexp
+    """
+    mrb = MethodRegexpBuilder(name, param_types)
+    ret: List[str] = []
+    if return_value:
+        ret.append(mrb.return_regexp())
+    if param:
+        if param == "return_value":
+            ret.append(mrb.return_regexp())
+        else:
+            ret.append(mrb.param_regexp(param))
+    if not param and not return_value:
+        ret.append(mrb.method_all_regexp())
+    return "|".join(f"({x})" for x in ret)
 
 
 @dataclass
@@ -166,7 +210,6 @@ class Graph:
     """
 
     def __init__(self):
-        self.cnf = DCNF()
         self.var_nodes: Dict[str, VarNode] = {}
         self.sat_nodes: List[Node] = []
         self.loop_iters: List[LoopIter] = []
@@ -175,6 +218,14 @@ class Graph:
         self.rec_nodes: NodeStore = NodeStore()
         self._finished_rec_nodes = False
         self.rec_children: List[RecursionChild] = []
+        self.deps: Deps = []
+
+    def get_var_nodes(self, regexp: str) -> List[VarNode]:
+        compiled = re.compile(regexp)
+        return [var for name, var in self.var_nodes.items() if compiled.fullmatch(name)]
+
+    def get_nv(self) -> int:
+        return len(self.sat_nodes) + 1
 
     def get_sat_node(self, var: int) -> Node:
         var = abs(var)
@@ -215,6 +266,10 @@ class Graph:
     @staticmethod
     def is_relate_line(line: str) -> bool:
         return line.startswith("c relate ")
+
+    @staticmethod
+    def is_rel_line(line: str) -> bool:
+        return line.startswith("c __rel__ ")
 
     def _parse_variables(self, vars: str, remove_first: bool) -> List[VarNode]:
         parts = vars.split(" ")[1 if remove_first else 0:]
@@ -261,15 +316,6 @@ class Graph:
             ret.append((self.get_var_node(var[int(neg):]), not neg))
         return ret
 
-    def _parse_sat_line(self, line: str):
-        clause = [int(i) for i in line.split(" ")[:-1]]
-        self.cnf.append(clause)
-        vars = [self.get_sat_node(i) for i in clause]
-        new_node = Node(None, vars)
-        new_node.origin.append(len(self.cnf.clauses) - 1)
-        for var in vars:
-            var.neighbors.append(new_node)
-
     def _parse_var_line(self, line: str):
         c, var, *sat_vars = line.split(" ")
         sat_nodes = [self.get_sat_node(int(s)) for s in sat_vars if s.isdigit() or (s[1:].isdigit() and s[0] == "-")]
@@ -306,7 +352,6 @@ class Graph:
         return var_nodes_to_ints([self.get_var_node(f"{var}#{num}") for var, num in variables.items()])
 
     def _add_dep(self, dep: Dep):
-        self.cnf.add_dep(dep)
         rel = []
         for vs in [dep.param, dep.ret, dep.constraint]:
             for v in vs:
@@ -315,9 +360,12 @@ class Graph:
                 rel.append(var_node)
         self._relate(rel)
 
-    def _parse_dep(self, line: str):
-        dep = Dep.from_comment(line)
-        self._add_dep(dep)
+    def _add_rel(self, to: Node, *_from: Node):
+        for f in _from:
+            f.neighbors.append(to)
+
+    def _parse_rel_line(self, line: str):
+        self._add_rel(*[self.get_sat_node(int(part)) for part in line.split(" ")[2:]])
 
     @staticmethod
     def is_recursion_child_line(line: str) -> bool:
@@ -436,8 +484,8 @@ class Graph:
         """
         # assert not self._finished_rec_nodes
         rec_children: Set[RecursionChild] = set(self.rec_children)
-        deps: Set[Dep] = set(self.cnf.deps)
-        clauses: Set[int] = set(range(len(self.cnf.clauses)))
+        deps: Set[Dep] = set(self.deps)
+        #clauses: Set[int] = set(range(len(self.cnf.clauses)))
 
         for node in self.rec_nodes.values():
             if node in consumed.consumed_nodes:
@@ -466,16 +514,18 @@ class Graph:
                 else:
                     assert isinstance(origin, int)
                     node_clauses.add(origin)
-                    clauses.remove(origin)
+                    #clauses.remove(origin)
 
             node.children = list(node_children)
             node.acnf.deps = list(node_deps)
             node.acnf.clauses = [self.cnf.clauses[i] for i in node_clauses]
 
         self.rec_children = list(rec_children)
-        self.cnf.set_deps(list(deps))
-        self.cnf.clauses = [self.cnf.clauses[i] for i in clauses]
+        #self.cnf.set_deps(list(deps))
+        #self.cnf.clauses = [self.cnf.clauses[i] for i in clauses]
         self._finished_rec_nodes = True
+        from pathlib import Path
+        self.rec_nodes.store_graph(Path("/tmp/test.png"))
         return list(self.rec_nodes.values())
 
     def process_recursion_graph(self, consumed: Consumed, dep_policy: DepGenerationPolicy,
@@ -737,8 +787,9 @@ class Graph:
         for line in raw_lines:
             line = line.strip()
             if Graph.is_sat_line(line):
-                graph._parse_sat_line(line)
-                lines.append(line)
+                continue
+            if Graph.is_rel_line(line):
+                graph._parse_rel_line(line)
             elif Graph.is_var_line(line):
                 graph._parse_var_line(line)
                 lines.append(line)
@@ -752,11 +803,6 @@ class Graph:
                 recursion_child_lines.append(line)
             elif Graph.is_recursion_node_line(line):
                 recursion_node_lines.append(line)
-            elif line.startswith("c dep "):
-                graph._parse_dep(line)
-            elif line.startswith("c ") or line.startswith("p "):
-                lines.append(line)
-                graph.cnf.comments.append(line)
         for recursion_child_line in recursion_child_lines:
             graph._parse_rec_child_line(recursion_child_line)
         for recursion_node_line in recursion_node_lines:
@@ -764,37 +810,47 @@ class Graph:
         for line in loop_lines:
             graph._parse_loop_line(line)
         graph.update_var_deps()
-        if ind_var_prefix:
-            ind = graph.find_ind_vars(ind_var_prefix, use_latest_ind_var)
-            graph.cnf.add_ind(*ind)
 
         consumed = graph.process_loop_iters()
 
         proc_res = graph.process_recursion_graph(consumed, dep_policy, compute_max_vars, counter_conf)
         for rec_child in graph.rec_children:
-            deps, clauses = proc_res.to_dep(rec_child, graph.cnf.nv + 1)
-            for dep in deps:
-                graph.cnf.add_dep(dep)
-            graph.cnf.extend(clauses)
+            deps, clauses = proc_res.to_dep(rec_child, graph.get_nv() + 1)
         return graph
 
     @classmethod
-    def process(cls, infile: IOBase, out: IOBase, dep_policy: DepGenerationPolicy, ind_var_prefix: str = None,
-                use_latest_ind_var: bool = True, counter_conf: "Config" = None):
-        cls.parse_graph(infile.readlines(), dep_policy, ind_var_prefix, use_latest_ind_var, counter_conf).cnf.to_fp(out)
+    def process(cls, infile: IOBase, dep_policy: DepGenerationPolicy, ind_var_prefix: str = None,
+                use_latest_ind_var: bool = True, counter_conf: "Config" = None) -> "Graph":
+        return cls.parse_graph(infile.readlines(), dep_policy, ind_var_prefix, use_latest_ind_var, counter_conf)
+
+    def create_summary_graph(self) -> "SummaryGraph":
+        return SummaryGraph(self)
 
 
-@click.command(name="convert", help="""
-Convert output of modified CBMC to D#SAT formulas.
+class SummaryGraph:
 
-Variables that start with __out are used for creating "c ind" statements (only their first assignment).
-""")
-@click.argument('infile', type=click.File(mode="r"), required=False, default="-")
-@click.argument('outfile', type=click.File(mode="w"), required=False, default="-")
-@click.argument('dep_gen_policy', type=DepGenerationPolicy, default=DepGenerationPolicy.FULL_VARS)
-def cli(infile: IOBase, outfile: IOBase, dep_gen_policy: DepGenerationPolicy):
-    Graph.process(infile, outfile, dep_gen_policy, ind_var_prefix="__out")
+    def __init__(self, g: Graph):
+        self.g = g
 
+    def related(self, from_: str, to_: str) -> bool:
+        return self._related(self.g.get_var_nodes(from_), self.g.get_var_nodes(to_))
 
-if __name__ == '__main__':
-    cli()
+    def _related(self, from_: List[VarNode], to_: List[VarNode]) -> bool:
+
+        visited: Set[Node] = set()
+        deq: Deque[Node] = deque()
+        border = {v for t in to_ for v in t.sat_vars}
+        for f in from_:
+            deq.extend(f.sat_vars)
+        while len(deq) > 0:
+            top = deq.pop()
+            if top in border:
+                return True
+            if top in visited:
+                continue
+            visited.add(top)
+            top_v = top.neighbors
+            if top_v:
+                deq.extendleft(top_v)
+
+        return False

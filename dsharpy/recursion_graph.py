@@ -8,6 +8,7 @@ and loops can be handled by converting them into semantically equivalent recursi
 from abc import abstractmethod, ABC
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Mapping, Iterator, Dict, Set, MutableMapping, Optional, Callable, Deque, Iterable, FrozenSet, \
     Tuple, Union
 
@@ -289,6 +290,16 @@ class NodeStore(Mapping[str, "RecursionNode"]):
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.base)
+
+    def store_graph(self, path: Path):
+        import pydot
+        g = pydot.Dot()
+        for node in self.values():
+            g.add_node(pydot.Node(str(node.id)))
+        for node in self.values():
+            for child in node.children:
+                g.add_edge(pydot.Edge(str(node.id), str(child.id)))
+        g.write_png(path)
 
 
 @dataclass
