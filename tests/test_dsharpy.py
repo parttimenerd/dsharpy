@@ -9,10 +9,24 @@ def test_basic():
     assert process("""
 void main()
 {
-  char __out = non_det();
-  END;
+  LEAK(INPUT(char));
 }
 """) == 8
+
+
+def test_minimal_implicit_flow():
+    assert process("""
+    void main(){
+        bool S = INPUT(bool);
+        bool O = 0;
+        if (S == 0) {
+            O = 0;
+        } else {
+            O = 1;
+        }
+        LEAK(O);
+    }
+    """, int_width=16) == 1
 
 
 def test_recursive_code_reduced_with_guard():
@@ -27,10 +41,7 @@ bool fib(bool num){
 
 void main()
 {
-  bool __out = fib(non_det_bool()); 
-  // but the overall variability of the program should be 2
-  // as it is unknown what fib(num) does
-  END;
+  LEAK(fib(INPUT(bool))); 
 }
 """, real_unwind=1) == 1
 
@@ -47,9 +58,7 @@ char fib(char num){
 
 void main()
 {
-  char b = fib(non_det_char());
-  char __out = b;
-  END;
+    LEAK(fib(INPUT(char)));
 }
 """, real_unwind=1) == 8
 
@@ -69,9 +78,7 @@ char fib(char num){
 
 void main()
 {
-  char b = fib(non_det_char());
-  char __out = b;
-  END;
+  LEAK(fib(INPUT(char)));
 }
 """, real_unwind=2) == 8
 
@@ -80,24 +87,22 @@ def test_multiple_outputs():
     assert process("""
 void main()
 {
-  char __out = non_det();
-  char __out2 = non_det();
-  END;
+  LEAK(INPUT(char));
+  LEAK(INPUT(char))
 }
 """) == 16
 
 
 def test_small_condition_loop():
-        assert process("""
+    assert process("""
     void main()
     {
-      char num = non_det_char();
+      char num = INPUT(char);
       char res = 0;
       if (res != num) {
         res = 1;
       }
-      char __out = res;
-      END;
+      LEAK(res);
     }
     """, real_unwind=1, int_width=16) == 1
 
@@ -106,27 +111,26 @@ def test_smaller_loop():
     assert process("""
 void main()
 {
-  char num = non_det_char();
+  char num = INPUT(char);
   char res = 0;
   while (res != num) {
     res = 1;
   }
-  char __out = res;
-  END;
+  LEAK(res);
 }
 """, real_unwind=1, int_width=16) == 8
+
 
 def test_small_loop():
     assert process("""
 void main()
 {
-  char num = non_det_char();
+  char num = INPUT(char);
   char res = 0;
   while (res < num) {
     res += 1;
   }
-  char __out = res;
-  END;
+  LEAK(res);
 }
 """, real_unwind=1) == 8
 
@@ -135,13 +139,12 @@ def test_small_loop_reduced():
     assert process("""
 void main()
 {
-  char num = non_det_char();
+  char num = INPUT(char);
   char res = 1;
   while (res != num) {
     res = res << 2;
   }
-  char __out = res;
-  END;
+  LEAK(res);
 }
 """, real_unwind=8) == 8
 
@@ -150,31 +153,29 @@ def test_small_loop2():
     assert process("""
 void main()
 {
-  char num = non_det_char();
+  char num = INPUT(char);
   char res = 1;
   while (res < num) {
     res *= 4;
     num *= 2;
   }
-  char __out = res;
-  END;
+  LEAK(res);
 }
-""") == 5
+""") == 8
 
 
 def test_small_loop3():
     assert process("""
 void main()
 {
-  char num = non_det_char();
+  char num = INPUT(char);
   char res = 1;
   while (res < num) {
     res *= 4;
     num++;
     num *= res == 2 ? 3 : 1;
   }
-  char __out = res;
-  END;
+  LEAK(res);
 }
 """) == 8
 
@@ -187,21 +188,21 @@ def test_a_loop_without_private_input():
       while (i < 1){
         i = i << 1;
       }
-      char __out = i;
-      END;
+      LEAK(i);
     }
     """) == 0
 
 
-def test_fully_unwindable_loop():
+@pytest.mark.parametrize("unwind,leakage", [(2, 8), (1, 8), (3, 0)])
+def test_fully_unwindable_loop(unwind: int, leakage: int):
     assert process("""
     void main()
     {
       char i = 0;
       while (i < 2) { i++; }
-      END;
+      LEAK(i);
     }
-    """) == 0
+    """, real_unwind=3) == 0
 
 
 @pytest.mark.skip("takes 4 minutes")
@@ -210,12 +211,11 @@ def test_array_in_loop():
     void main()
     {
       int arr[10];
-      int S = non_det();
+      int S = INPUT(int);
       for (int i = 0; i < 10; i++){
         arr[i] = S & i;
       }
-      int __out = arr[4];
-      END;
+      LEAK(arr[4]);
     }
     """) == 32
 
@@ -225,12 +225,11 @@ def test_array_in_loop_reduced():
     void main()
     {
       char arr[10];
-      char S = non_det();
+      char S = INPUT(char);
       for (char i = 0; i < 10; i++){
         arr[i] = S & i;
       }
-      char __out = arr[4];
-      END;
+      LEAK(arr[4]);
     }
     """) == 8
 
@@ -249,31 +248,11 @@ def test_global_variables_with_recursion():
     
     void main()
     {
-      char H = non_det_char();
+      char H = INPUT(char);
       func(H, 0);
-      char __out = global;
-      END;
+      LEAK(global);
     }
     """) == 8
-
-
-@pytest.mark.parametrize("rec", [
-    (0,),
-    (5,)
-])
-def test_recursion_without_effect(rec: int):
-    assert process("""
-    bool func(){
-        func();
-        return 0;
-    }
-
-    void main()
-    {
-      func();
-      END;
-    }
-    """) == 0
 
 
 def test_recursive_code_reduced_with_guard_and_abstract_rec():
@@ -288,10 +267,9 @@ bool fib(bool num){
 
 void main()
 {
-  bool __out = fib(non_det_bool());
-  END;
+  LEAK(fib(INPUT(bool)));
 }
-""") == 2  # non_det_bool() returns a proper one bit bool (not the worst case for ABI, but ok nonetheless)
+""") == 1
 
 
 def test_recursive_code_reduced_with_guard_and_abstract_rec2():
@@ -299,10 +277,9 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec2():
     bool fib(bool num){ return num ? !fib(num) : num; }
     void main()
     {
-      bool __out = fib(non_det_bool());
-      END;
+      LEAK(fib(INPUT(bool)));
     }
-    """) == 2  # the boolean negation
+    """) == 1  # the boolean negation
 
 
 def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
@@ -313,11 +290,9 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
 
     void main()
     {
-      bool __out = fib(non_det_bool());
-      END;
+      LEAK(fib(INPUT(bool)));
     }
-    """, real_unwind=1) == 2
-
+    """, real_unwind=1) == 1
 
 
 def test_abstract_rec_with_double_rec():
@@ -328,10 +303,9 @@ def test_abstract_rec_with_double_rec():
 
     void main()
     {
-      bool __out = fib(1) && fib(1);
-      END;
+      LEAK(fib(1) && fib(1));
     }
-    """) == 0  # this is valid, as fib is a pure function (and its probably known in symex)
+    """) == 0
 
 
 def test_abstract_rec_with_const_arg():
@@ -342,8 +316,7 @@ def test_abstract_rec_with_const_arg():
 
     void main()
     {
-      bool __out = fib(1);
-      END;
+      LEAK(fib(1));
     }
     """) == 0
 
@@ -367,14 +340,13 @@ def test_loops_and_recursion_mixed():
     }
     
     void main(){
-        char h = non_det_char();
+        char h = INPUT(char);
         while (h != f(h)){
             h--;
         }
-        char __out = f(h);
-        END;
+        LEAK(f(h));
     }
-    """) == 1
+    """) == 8
 
 
 MATestCases = {
@@ -384,14 +356,13 @@ MATestCases = {
         /* discovery and quantification of information leaks" */
         /* Should leak the whole secret */
         void main(){
-            int h = non_det();
+            int h = INPUT(int);
             int z = 0;
             while (h >= 1){
                 h = h - 1;
                 z = z + 1;
             }
-            int __out = z;
-            END;
+            LEAK(z);
         }
         """,
         "leakage": (31, 32)
@@ -407,15 +378,14 @@ MATestCases = {
                 H = H - 5;
                 O = O + 1;
             }
-            int __out = O;
-            END;
+            LEAK(O);
         }
         """,
         "leakage": (4, 32)
     },
     "electronic purse 2 with unwinding 10": {
         "code": "electronic purse 2",
-        "leakage": 2,
+        "leakage": 8,
         "unwind": 10
     },
     "implicit flow": {
@@ -424,7 +394,7 @@ MATestCases = {
         /* https://github.com/qif/jpf-qif/blob/master/src/examples/plas/ImplicitFlow.java */
         /* Should leak log 7 = 2.8074 */
         void main(){
-            int S = non_det();
+            int S = INPUT(int);
             int O;
             if (S == 0) {
                 O = 0;
@@ -455,11 +425,10 @@ MATestCases = {
                     }
                 }
             }
-            int __out = O;
-            END;
+            LEAK(O);
         }
         """,
-        "leakage": (2.8, 2.9)
+        "leakage": 3
     },
     # omitted the other test cases from https://github.com/parttimenerd/nildumu/blob/master/src/main/java/nildumu/eval/specimen/eval
     # that do not contain loops or recursion
@@ -469,13 +438,12 @@ MATestCases = {
         /* Should leak 16 bits */
         void main(){
             unsigned int O = 0;
-            unsigned int S = non_det();
+            unsigned int S = INPUT(unsigned int);
             for (int i = 0; i < 16; i++) {
                 unsigned int m = 1 << (31-i);
                 if (O + m <= S) O += m;
             }
-            unsigned int __out = O;
-            END;
+            LEAK(O);
         }
         """,
         "leakage": 16,
@@ -492,10 +460,9 @@ MATestCases = {
         }
         
         void main(){
-            int h = non_det();
+            int h = INPUT(int);
             int z = fib(h & 0b00000000000000000000000000011111);
-            int __out = z;
-            END;
+            LEAK(z);
         }
         """,
         "leakage": 0
