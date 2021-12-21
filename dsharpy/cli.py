@@ -23,11 +23,13 @@ It does add
 @click.option("-v", "--verbose", type=bool, default=False)
 @click.option('--unwind', type=int, default=2)
 @click.option("--b16", type=bool, default=False, help="assume 16 bit integers", is_flag=True)
-def cli(file, model_checker, leakage_computer, verbose: bool, unwind, b16):
+@click.option("--delta", type=float, default=0.2, help="delta for approxflow")
+@click.option("--epsilon", type=float, default=0.8, help="epsilon for approxflow")
+def cli(file, model_checker, leakage_computer, verbose: bool, unwind, b16, delta, epsilon):
     logging.basicConfig(level=logging.INFO if verbose else logging.WARNING)
     start_time = time.time()
     mc = MODEL_CHECKERS[model_checker](unwind, bit_width=16 if b16 else 32)
-    lc = LEAKAGE_COMPUTERS[leakage_computer]()
+    lc = LEAKAGE_COMPUTERS[leakage_computer](**({"delta": delta, "epsilon": epsilon} if leakage_computer == "approxflow" else {}))
     leakage = process(mc, lc, Path(file))
     print(f" {time.time() - start_time:3.3f} seconds")
     print("=======================")
