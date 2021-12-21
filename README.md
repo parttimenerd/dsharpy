@@ -12,8 +12,6 @@ Installation via https://python-poetry.org
 
     poetry install
 
-    poetry run dsharpy test.cnf
-
     # if update.sh has been called (installing the custom CBMC)
     poetry run dsharpy test.c
 

@@ -1,7 +1,9 @@
-[submodule "util/modified_cbmc"]
-	path = util/modified_cbmc
-	url = https://github.com/parttimenerd/cbmc
-	branch = modified_cbmc
-[submodule "util/relationscutter"]
-	path = util/relationscutter
+[submodule "tools/relationscutter"]
+	path = tools/relationscutter
 	url = https://github.com/parttimenerd/relationscutter
+[submodule "tools/modified_cbmc"]
+	path = tools/modified_cbmc
+	url = https://github.com/parttimenerd/cbmc.git
+[submodule "tools/cbmc"]
+	path = tools/cbmc
+	url = https://github.com/diffblue/cbmc.git

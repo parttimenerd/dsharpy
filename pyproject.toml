@@ -27,3 +27,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 dsharpy = "dsharpy.cli:cli"
+
+[pytest]
+log_cli = 1

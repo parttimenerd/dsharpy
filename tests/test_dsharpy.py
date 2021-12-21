@@ -1,8 +1,18 @@
+import logging
 from typing import Tuple
 
 import pytest
 
-from dsharpy.util import process
+from dsharpy.tools import MODEL_CHECKERS, LEAKAGE_COMPUTERS
+import dsharpy.tools as tools
+
+logging.basicConfig(level=logging.ERROR)
+
+
+def process(code: str, mc: str = "modified_cbmc", lc: str = "relationscutter", unwind: int = 3, int_width: int = 32):
+    mc = MODEL_CHECKERS[mc](unwind, bit_width=int_width)
+    lc = LEAKAGE_COMPUTERS[lc]()
+    return tools.process(mc, lc, code)
 
 
 def test_basic():
@@ -12,6 +22,15 @@ void main()
   LEAK(INPUT(char));
 }
 """) == 8
+
+
+def test_basic_approxflow():
+    assert process("""
+void main()
+{
+  LEAK(INPUT(char));
+}
+""", lc="approxflow") == 8
 
 
 def test_minimal_implicit_flow():
@@ -43,7 +62,7 @@ void main()
 {
   LEAK(fib(INPUT(bool))); 
 }
-""", real_unwind=1) == 1
+""", unwind=1) == 1
 
 
 def test_recursive_code():
@@ -60,7 +79,7 @@ void main()
 {
     LEAK(fib(INPUT(char)));
 }
-""", real_unwind=1) == 8
+""", unwind=1) == 8
 
 
 def test_recursive_code_real_fib():
@@ -80,7 +99,7 @@ void main()
 {
   LEAK(fib(INPUT(char)));
 }
-""", real_unwind=2) == 8
+""", unwind=2) == 8
 
 
 def test_multiple_outputs():
@@ -104,7 +123,7 @@ def test_small_condition_loop():
       }
       LEAK(res);
     }
-    """, real_unwind=1, int_width=16) == 1
+    """, unwind=1, int_width=16) == 1
 
 
 def test_smaller_loop():
@@ -118,7 +137,7 @@ void main()
   }
   LEAK(res);
 }
-""", real_unwind=1, int_width=16) == 8
+""", unwind=1, int_width=16) == 8
 
 
 def test_small_loop():
@@ -132,7 +151,7 @@ void main()
   }
   LEAK(res);
 }
-""", real_unwind=1) == 8
+""", unwind=1) == 8
 
 
 def test_small_loop_reduced():
@@ -146,7 +165,7 @@ void main()
   }
   LEAK(res);
 }
-""", real_unwind=8) == 8
+""", unwind=8) == 8
 
 
 def test_small_loop2():
@@ -202,7 +221,7 @@ def test_fully_unwindable_loop(unwind: int, leakage: int):
       while (i < 2) { i++; }
       LEAK(i);
     }
-    """, real_unwind=3) == 0
+    """, unwind=3) == 0
 
 
 @pytest.mark.skip("takes 4 minutes")
@@ -292,7 +311,7 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
     {
       LEAK(fib(INPUT(bool)));
     }
-    """, real_unwind=1) == 1
+    """, unwind=1) == 1
 
 
 def test_abstract_rec_with_double_rec():
@@ -494,6 +513,6 @@ class TestMATests:
         config = d.get("config", None)
         if isinstance(leakage, tuple):
             leakage_lower_bound, leakage_upper_bound = leakage
-            assert leakage_lower_bound <= process(code, real_unwind=unwind) <= leakage_upper_bound, name
+            assert leakage_lower_bound <= process(code, unwind=unwind) <= leakage_upper_bound, name
         else:
-            assert process(code, real_unwind=unwind) == leakage
+            assert process(code, unwind=unwind) == leakage
