@@ -94,18 +94,27 @@ class ModelChecker(Tool):
         return []
 
 
-class CBMC(ModelChecker):
-    def __init__(self, name: str = "cbmc", unwind: int = 32, bit_width: int = 32):
-        super(CBMC, self).__init__(name, f"TOOLS/{name}/build/bin/cbmc", unwind, bit_width)
+class CBMCBase(ModelChecker):
+    def __init__(self, name: str, unwind: int = 32, bit_width: int = 32):
+        super(CBMCBase, self).__init__(name, f"TOOLS/{name}/build/bin/cbmc", unwind, bit_width)
 
     def setup_for(self, lc: "LeakageComputer"):
         assert not lc.requires_rel()
+
+    def _env_vars(self, code: Path) -> Dict[str, Any]:
+        return {"PARTIAL_LOOPS": True}
 
     def _arguments(self, code: Path) -> List[Any]:
         return [code, f"--{self.bit_width}", "--unwind", self.unwind, "--dimacs"]
 
 
-class ModifiedCBMC(CBMC):
+class CBMC(CBMCBase):
+
+    def __init__(self, unwind: int = 32, bit_width: int = 32):
+        super(CBMC, self).__init__("cbmc", unwind, bit_width)
+
+
+class ModifiedCBMC(CBMCBase):
     """ CBMC with loop and recursion approximation """
 
     def __init__(self, unwind: int = 32, bit_width: int = 32):
@@ -219,7 +228,7 @@ def process(model_checker: ModelChecker, leakage_computer: LeakageComputer, code
 
 MODEL_CHECKERS = {
     "modified_cbmc": lambda unwind, **kwargs: ModifiedCBMC(unwind, **kwargs),
-    "cbmc": lambda unwind, **kwargs: ModifiedCBMC(unwind, **kwargs)
+    "cbmc": lambda unwind, **kwargs: CBMC(unwind, **kwargs)
 }
 
 

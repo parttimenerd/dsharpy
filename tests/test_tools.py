@@ -15,6 +15,17 @@ def process(code: str, mc: str = "modified_cbmc", lc: str = "relationscutter", u
     return tools.process(mc, lc, code)
 
 
+def test_process_invalid_code():
+    with pytest.raises(BaseException):
+        process("""
+        void main()
+        {
+          int __out = non;_det();
+          assert(__out);
+        }
+        """)
+
+
 def test_basic():
     assert process("""
 void main()
@@ -31,6 +42,20 @@ void main()
   LEAK(INPUT(char));
 }
 """, lc="approxflow") == 8
+
+
+def test_normal_cbmc_laundering_underapprox():
+    assert process("""
+void main()
+{
+  int h = INPUT(int);
+  int o = 0;
+  while (h != o) {
+    o++;
+  }
+  LEAK(o);
+}
+""", lc="approxflow", mc="cbmc", unwind=8) == 3
 
 
 def test_minimal_implicit_flow():
