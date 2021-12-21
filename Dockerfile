@@ -1,3 +1,5 @@
+# based on https://github.com/diffblue/cbmc/Dockerfile
+
 FROM ubuntu:20.04 as builder
 ENV DEBIAN_FRONTEND noninteractive
 ENV DEBCONF_NONINTERACTIVE_SEEN true
@@ -21,9 +23,11 @@ RUN echo 'tzdata tzdata/Areas select Etc' | debconf-set-selections; \
     libxml2-utils \
     patch \
     libboost-program-options-dev \
-    zlib1g-dev wget libgmp-dev unzip libc6-dev gcc-multilib g++-multilib vim emacs nano jq
+    ccache \
+    zlib1g-dev wget libgmp-dev unzip libc6-dev gcc-multilib g++-multilib vim emacs nano jq git
 COPY . /dsharpy
 WORKDIR /dsharpy
+RUN rm -fr tools/*/build
 RUN ./update.sh
 
 # install dsharpy
@@ -56,5 +60,5 @@ RUN mkdir build
 WORKDIR /approxmc/build
 RUN cmake -DSTATICCOMPILE=ON ..
 RUN make -j6 && make install
-COPY /approxmc/build/approxmc /dsharyp/tools
+RUN cp /approxmc/build/approxmc /dsharpy/tools
 WORKDIR /dsharpy
