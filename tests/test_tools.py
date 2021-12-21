@@ -541,3 +541,24 @@ class TestMATests:
             assert leakage_lower_bound <= process(code, unwind=unwind) <= leakage_upper_bound, name
         else:
             assert process(code, unwind=unwind) == leakage
+
+
+def test_approxflow_binsearch16():
+    assert process("""
+    #define BITS 16
+
+int main() {
+    unsigned int I = INPUT(unsigned int);
+
+    unsigned int O = 0;
+
+    unsigned int m;
+    int i;
+
+    for (i = 0; i < BITS; i++) {
+      m = 1;
+      if (O + m <= I) O += m;
+    }
+    LEAK(O);
+}
+""", lc="approxflow", mc="cbmc", unwind=8) == 8

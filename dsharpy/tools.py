@@ -102,10 +102,10 @@ class CBMCBase(ModelChecker):
         assert not lc.requires_rel()
 
     def _env_vars(self, code: Path) -> Dict[str, Any]:
-        return {"PARTIAL_LOOPS": True}
+        return {}
 
     def _arguments(self, code: Path) -> List[Any]:
-        return [code, f"--{self.bit_width}", "--unwind", self.unwind, "--dimacs"]
+        return [code, f"--{self.bit_width}", "--unwind", self.unwind, "--dimacs", "--partial-loops"]
 
 
 class CBMC(CBMCBase):
