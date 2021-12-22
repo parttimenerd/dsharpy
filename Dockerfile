@@ -1,4 +1,4 @@
-# based on https://github.com/diffblue/cbmc/Dockerfile
+# roughly based on https://github.com/diffblue/cbmc/Dockerfile
 
 FROM ubuntu:20.04 as builder
 ENV DEBIAN_FRONTEND noninteractive

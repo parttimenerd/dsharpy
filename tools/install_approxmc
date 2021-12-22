@@ -1,0 +1,46 @@
+#!/usr/bin/env sh
+
+# requires the following debian packages: libboost-program-options-dev gcc g++ make cmake zlib1g-dev wget make libgmp-dev
+
+set -e
+case "$(uname -s)" in
+   Darwin)
+     SCRIPT_PATH=$(greadlink -f "$0")
+     ;;
+
+   *)
+     SCRIPT_PATH=$(readlink -f "$0")
+     ;;
+esac
+
+PROJECT_DIR=$(dirname "$SCRIPT_PATH")
+
+cd "$PROJECT_DIR"
+
+# build m4ri
+wget https://bitbucket.org/malb/m4ri/downloads/m4ri-20200125.tar.gz
+tar -xvf m4ri-20200125.tar.gz
+rm m4ri-20200125.tar.gz
+(cd m4ri-20200125; ./configure; make && make install; cd ..; rm -fr m4ri-20200125)
+
+# build CryptoMiniSat for ApproxFlow
+
+wget https://github.com/msoos/cryptominisat/archive/5.8.0.tar.gz
+tar -xvf 5.8.0.tar.gz
+rm 5.8.0.tar.gz
+(cd cryptominisat-5.8.0; mkdir -p build; cd build; cmake -DSTATICCOMPILE=ON ..; make -j6 && make install;
+cd "$PROJECT_DIR"; rm -fr cryptominisat-5.8.0)
+
+# build ApproxMC for ApproxFlow
+rm -fr approxmc_
+git clone https://github.com/meelgroup/approxmc approxmc_
+cd approxmc_
+git checkout c9144b7b0f1c13f5c2f2d507e9493093b1afd4ff
+mkdir -p build
+cd build
+cmake -DSTATICCOMPILE=ON ..
+make -j6 && make install
+ls "$PROJECT_DIR"
+cp approxmc "$PROJECT_DIR"
+cd "$PROJECT_DIR"
+rm -fr approxmc_
