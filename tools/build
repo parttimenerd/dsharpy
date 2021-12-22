@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+set -e
+case "$(uname -s)" in
+   Darwin)
+     SCRIPT_PATH=$(greadlink -f "$0")
+     ;;
+
+   *)
+     SCRIPT_PATH=$(readlink -f "$0")
+     ;;
+esac
+
+PROJECT_DIR=$(dirname "$SCRIPT_PATH")
+
+cd "$PROJECT_DIR"
+(cd relationscutter; ./build.sh)
+(cd cbmc; cmake -S . -Bbuild -G Ninja -DWITH_JBMC=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ && cd build; ninja -j4)
+(cd modified_cbmc; cmake -S . -Bbuild -G Ninja -DWITH_JBMC=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++ && cd build; ninja -j4)

@@ -8,7 +8,7 @@ Usage
 ------------
 
 Compilation of the required tools via `./update.sh`
-(assuming that `make cmake ninja-build gcc g++ flex bison libxml2-utils patch` is installed).
+(assuming that `make cmake ninja-build gcc g++ flex bison libxml2-utils patch ccache python3 python3-pip` is installed).
 
 Installation via https://python-poetry.org
 
