@@ -16,7 +16,7 @@ RUN echo 'tzdata tzdata/Areas select Etc' | debconf-set-selections; \
 COPY . /dsharpy
 WORKDIR /dsharpy
 RUN rm -fr tools/*/build
-RUN ./tools/install_approxmc
+#RUN ./tools/install_approxmc
 RUN ./update.sh
 
 # install dsharpy

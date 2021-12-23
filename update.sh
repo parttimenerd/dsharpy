@@ -10,4 +10,3 @@ git submodule update --recursive
 (cd tools/modified_cbmc; git pull origin information_flow)
 (cd tools/cbmc; git pull origin develop)
 (cd tools; ./build)
-(cd tools; ./install_approxmc)
