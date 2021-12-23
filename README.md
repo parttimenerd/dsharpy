@@ -8,7 +8,9 @@ Usage
 ------------
 
 Compilation of the required tools via `./update.sh`
-(assuming that `make cmake ninja-build gcc g++ flex bison libxml2-utils patch ccache python3 python3-pip` is installed).
+(assuming that `bison ccache cmake curl flex g++ g++-multilib gcc gcc-multilib git jq libboost-program-options-dev libc6-dev libgmp-dev libxml2-utils make ninja-build patch unzip wget zlib1g-dev python3 python3-pip` is installed).
+It compiles and installs a version of [ApproxMC](https://github.com/meelgroup/approxmc/) and related tools,
+takes fairly long.
 
 Installation via https://python-poetry.org
 

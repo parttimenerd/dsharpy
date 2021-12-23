@@ -11,12 +11,12 @@ ENV DEBCONF_NONINTERACTIVE_SEEN true
 RUN echo 'tzdata tzdata/Areas select Etc' | debconf-set-selections; \
     echo 'tzdata tzdata/Zones/Etc select UTC' | debconf-set-selections; \
     apt-get update && apt-get upgrade -y && apt-get install --no-install-recommends -y ca-certificates \
-    make cmake ninja-build gcc g++ flex bison libxml2-utils patch ccache make \
-    zlib1g-dev wget libgmp-dev unzip libc6-dev gcc-multilib g++-multilib vim emacs nano jq git \
-    python3 python3-pip
+    bison ccache cmake curl flex g++ g++-multilib gcc gcc-multilib git jq libboost-program-options-dev \
+    libc6-dev libgmp-dev libxml2-utils make ninja-build patch unzip wget zlib1g-dev python3 python3-pip
 COPY . /dsharpy
 WORKDIR /dsharpy
 RUN rm -fr tools/*/build
+RUN ./tools/install_approxmc
 RUN ./update.sh
 
 # install dsharpy
