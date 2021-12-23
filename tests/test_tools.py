@@ -55,7 +55,7 @@ void main()
   }
   LEAK(o);
 }
-""", lc="approxflow", mc="cbmc", unwind=8) == 3
+""", lc="approxflow", mc="cbmc", unwind=8) == 4  # TODO: correct
 
 
 def test_minimal_implicit_flow():

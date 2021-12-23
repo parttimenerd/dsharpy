@@ -1,0 +1,1 @@
+sudo sh -c "docker build -t x .; docker tag x parttimenerd/dsharpy:latest; docker push partgittimenerd/dsharpy:latest; docker image rm x"
