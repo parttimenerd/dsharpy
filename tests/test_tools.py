@@ -3,6 +3,7 @@ from typing import Tuple
 
 import pytest
 
+from dsharpy.preprocess import preprocess_c_code
 from dsharpy.tools import MODEL_CHECKERS, LEAKAGE_COMPUTERS
 import dsharpy.tools as tools
 
@@ -55,7 +56,7 @@ void main()
   }
   LEAK(o);
 }
-""", lc="approxflow", mc="cbmc", unwind=8) == 4  # TODO: correct
+""", lc="approxflow", mc="cbmc", unwind=8) == pytest.approx(3.2, 0.1)
 
 
 def test_minimal_implicit_flow():
@@ -562,3 +563,24 @@ int main() {
     LEAK(O);
 }
 """, lc="approxflow", mc="cbmc", unwind=8) == 8
+
+
+def test_approxflow_electronic_purse():
+    program = """
+    #include <assert.h>
+int nondet();
+int nondet2();
+
+int main() {
+  int H = nondet();
+  int O = 0;
+  while (H >= 5 && H < 20){
+      H = H - 5;
+      O = O + 1;
+  }
+  int __out = O;
+  assert(nondet2());
+}
+    """
+    print(preprocess_c_code(program))
+    assert process(program, lc="approxflow", mc="cbmc", unwind=8) == 2

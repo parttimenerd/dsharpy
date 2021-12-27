@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Dict, Set, Tuple
+from typing import TYPE_CHECKING, Dict, Set, Tuple, Iterable
 
 from dsharpy.preprocess import preprocess_c_code
 
@@ -73,18 +73,34 @@ class Tool:
 
 
 class ModelChecker(Tool):
+
     def __init__(self, name: str, binary: str, unwind: int, bit_width: int = 32):
         super(ModelChecker, self).__init__(name, binary)
         self.unwind = unwind
         self.bit_width = bit_width
+        self._problem_line_re = re.compile('((p cnf)|(c __rel__ p)) [0-9]+ [0-9]+\n')
 
     def setup_for(self, lc: "LeakageComputer"):
         pass
 
+    def _is_problem_line(self, line: str) -> bool:
+        return bool(self._problem_line_re.match(line))
+
+    def _filter_lines(self, lines: List[str]) -> Iterable[str]:
+        has_seen_problem_line = False
+        for line in lines:
+            if not has_seen_problem_line:
+                if self._is_problem_line(line):
+                    yield line
+                    has_seen_problem_line = True
+                continue
+            if line.startswith("c ") or line.endswith(" 0\n"):
+                yield line
+
     def process(self, tmp_dir: Path, code: Union[str, Path]) -> Path:
         code = Tool._preprocess(tmp_dir, code)
         with NamedTemporaryFile(suffix=".cnf", dir=tmp_dir, delete=False) as f:
-            f.writelines(l.encode() for l in self._process(self._arguments(code), self._env_vars(code)).splitlines(keepends=True) if l.startswith("c ") or l.endswith(" 0") or l.startswith("p "))
+            f.writelines(l.encode() for l in self._filter_lines(self._process(self._arguments(code), self._env_vars(code)).splitlines(keepends=True)))
             return Path(f.name)
 
     def _env_vars(self, code: Path) -> Dict[str, Any]:
