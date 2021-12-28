@@ -4,6 +4,9 @@ with the [https://github.com/parttimenerd/relationscutter](relationscutter) tool
 It only does a bit of preprocessing and is used for testing CBMC (both the modified and the unmodified version)
 and leak computation tools like a reimplementation of ApproxFlow and relationscutter.
 
+
+TODO: better link to tools
+
 Installation
 ------------
 Either by using the provided Dockerfile (`docker build -t dsharpy .; docker run -it dsharpy`),
@@ -30,7 +33,7 @@ The preprocessor adds the following:
 
 - `#include <assert.h>` to use asserts
 - `INPUT(type)` to get a random (and therefore input) value of the specified type
-- `LEAK(expr)` that assigns the passed expression to a new output variable, the last leak also adds an assert
+- `OBSERVE(expr)` that assigns the passed expression to a new output variable, the last leak also adds an assert
   to force the model checker to produce a SAT formula
 
 The most basic program is given in the following as an example (more in the `tests/test_tools.py` file):
@@ -38,7 +41,7 @@ The most basic program is given in the following as an example (more in the `tes
 ```cpp
     void main()
     {
-      LEAK(INPUT(char));
+      OBSERVE(INPUT(char));
     }
 ```
 

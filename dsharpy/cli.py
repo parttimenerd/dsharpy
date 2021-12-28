@@ -14,7 +14,7 @@ Preprocesses c code to make it easier to write example programs for information 
 It does add
 - `#include <assert.h>` to use asserts
 - `INPUT(type)` to get a random (and therefore input) value of the specified type
-- `LEAK(expr)` that assigns the passed expression to a new output variable, the last leak also adds an assert
+- `OBSERVE(expr)` that assigns the passed expression to a new output variable, the last leak also adds an assert
   to force the model checker to produce a SAT formula
 """)
 @click.argument('file', type=click.Path(exists=True, allow_dash=True, dir_okay=False))

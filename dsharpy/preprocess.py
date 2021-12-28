@@ -9,7 +9,7 @@ def preprocess_c_code(c_code: str, out_var_prefix: str = "__out") -> str:
     It does add
     - `#include <assert.h>` to use asserts
     - `INPUT(type)` to get a random (and therefore input) value of the specified type
-    - `LEAK(expr)` that assigns the passed expression to a new output variable, the last leak also adds an assert
+    - `OBSERVE(expr)` that assigns the passed expression to a new output variable, the last leak also adds an assert
       to force the model checker to produce a SAT formula
 
     This code uses regular expressions and C macros…
@@ -41,14 +41,14 @@ def preprocess_c_code(c_code: str, out_var_prefix: str = "__out") -> str:
     c_code = re.sub(r"INPUT\(([^)]+)\)", replace_input, c_code)
 
     out_count: List[int] = [0]
-    max_out_count: int = len(re.findall(r"LEAK\(", c_code))
+    max_out_count: int = len(re.findall(r"OBSERVE\(", c_code))
 
     def replace_leak(match: re.Match):
-        name = f"LEAK{'' if out_count[0] == 0 else out_count[0]}"
+        name = f"OBSERVE{'' if out_count[0] == 0 else out_count[0]}"
         out_count[0] += 1
         new_lines_to_add.append(f"#define {name}(value) typeof((value)) {out_var_prefix}{out_count[0] if out_count[0] else ''} = (value); {'END;' if max_out_count == out_count[0] else ''}")
         return name + "("
 
-    c_code = re.sub(r"LEAK\(", replace_leak, c_code)
+    c_code = re.sub(r"OBSERVE\(", replace_leak, c_code)
 
     return "\n".join(new_lines_to_add + c_code.split("\n"))

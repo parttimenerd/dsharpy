@@ -31,7 +31,7 @@ def test_basic():
     assert process("""
 void main()
 {
-  LEAK(INPUT(char));
+  OBSERVE(INPUT(char));
 }
 """) == 8
 
@@ -40,7 +40,7 @@ def test_basic_approxflow():
     assert process("""
 void main()
 {
-  LEAK(INPUT(char));
+  OBSERVE(INPUT(char));
 }
 """, lc="approxflow") == 8
 
@@ -54,7 +54,7 @@ void main()
   while (h != o) {
     o++;
   }
-  LEAK(o);
+  OBSERVE(o);
 }
 """, lc="approxflow", mc="cbmc", unwind=8) == pytest.approx(3.2, 0.1)
 
@@ -69,7 +69,7 @@ def test_minimal_implicit_flow():
         } else {
             O = 1;
         }
-        LEAK(O);
+        OBSERVE(O);
     }
     """, int_width=16) == 1
 
@@ -86,7 +86,7 @@ bool fib(bool num){
 
 void main()
 {
-  LEAK(fib(INPUT(bool))); 
+  OBSERVE(fib(INPUT(bool))); 
 }
 """, unwind=1) == 1
 
@@ -103,7 +103,7 @@ char fib(char num){
 
 void main()
 {
-    LEAK(fib(INPUT(char)));
+    OBSERVE(fib(INPUT(char)));
 }
 """, unwind=1) == 8
 
@@ -123,7 +123,7 @@ char fib(char num){
 
 void main()
 {
-  LEAK(fib(INPUT(char)));
+  OBSERVE(fib(INPUT(char)));
 }
 """, unwind=2) == 8
 
@@ -132,8 +132,8 @@ def test_multiple_outputs():
     assert process("""
 void main()
 {
-  LEAK(INPUT(char));
-  LEAK(INPUT(char))
+  OBSERVE(INPUT(char));
+  OBSERVE(INPUT(char))
 }
 """) == 16
 
@@ -147,7 +147,7 @@ def test_small_condition_loop():
       if (res != num) {
         res = 1;
       }
-      LEAK(res);
+      OBSERVE(res);
     }
     """, unwind=1, int_width=16) == 1
 
@@ -161,7 +161,7 @@ void main()
   while (res != num) {
     res = 1;
   }
-  LEAK(res);
+  OBSERVE(res);
 }
 """, unwind=1, int_width=16) == 8
 
@@ -175,7 +175,7 @@ void main()
   while (res < num) {
     res += 1;
   }
-  LEAK(res);
+  OBSERVE(res);
 }
 """, unwind=1) == 8
 
@@ -189,7 +189,7 @@ void main()
   while (res != num) {
     res = res << 2;
   }
-  LEAK(res);
+  OBSERVE(res);
 }
 """, unwind=8) == 8
 
@@ -204,7 +204,7 @@ void main()
     res *= 4;
     num *= 2;
   }
-  LEAK(res);
+  OBSERVE(res);
 }
 """) == 8
 
@@ -220,7 +220,7 @@ void main()
     num++;
     num *= res == 2 ? 3 : 1;
   }
-  LEAK(res);
+  OBSERVE(res);
 }
 """) == 8
 
@@ -233,7 +233,7 @@ def test_a_loop_without_private_input():
       while (i < 1){
         i = i << 1;
       }
-      LEAK(i);
+      OBSERVE(i);
     }
     """) == 0
 
@@ -245,7 +245,7 @@ def test_fully_unwindable_loop(unwind: int, leakage: int):
     {
       char i = 0;
       while (i < 2) { i++; }
-      LEAK(i);
+      OBSERVE(i);
     }
     """, unwind=3) == 0
 
@@ -260,7 +260,7 @@ def test_array_in_loop():
       for (int i = 0; i < 10; i++){
         arr[i] = S & i;
       }
-      LEAK(arr[4]);
+      OBSERVE(arr[4]);
     }
     """) == 32
 
@@ -274,7 +274,7 @@ def test_array_in_loop_reduced():
       for (char i = 0; i < 10; i++){
         arr[i] = S & i;
       }
-      LEAK(arr[4]);
+      OBSERVE(arr[4]);
     }
     """) == 8
 
@@ -295,7 +295,7 @@ def test_global_variables_with_recursion():
     {
       char H = INPUT(char);
       func(H, 0);
-      LEAK(global);
+      OBSERVE(global);
     }
     """) == 8
 
@@ -312,7 +312,7 @@ bool fib(bool num){
 
 void main()
 {
-  LEAK(fib(INPUT(bool)));
+  OBSERVE(fib(INPUT(bool)));
 }
 """) == 1
 
@@ -322,7 +322,7 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec2():
     bool fib(bool num){ return num ? !fib(num) : num; }
     void main()
     {
-      LEAK(fib(INPUT(bool)));
+      OBSERVE(fib(INPUT(bool)));
     }
     """) == 1  # the boolean negation
 
@@ -335,7 +335,7 @@ def test_recursive_code_reduced_with_guard_and_abstract_rec_small():
 
     void main()
     {
-      LEAK(fib(INPUT(bool)));
+      OBSERVE(fib(INPUT(bool)));
     }
     """, unwind=1) == 1
 
@@ -348,7 +348,7 @@ def test_abstract_rec_with_double_rec():
 
     void main()
     {
-      LEAK(fib(1) && fib(1));
+      OBSERVE(fib(1) && fib(1));
     }
     """) == 0
 
@@ -361,7 +361,7 @@ def test_abstract_rec_with_const_arg():
 
     void main()
     {
-      LEAK(fib(1));
+      OBSERVE(fib(1));
     }
     """) == 0
 
@@ -389,7 +389,7 @@ def test_loops_and_recursion_mixed():
         while (h != f(h)){
             h--;
         }
-        LEAK(f(h));
+        OBSERVE(f(h));
     }
     """) == 8
 
@@ -407,7 +407,7 @@ MATestCases = {
                 h = h - 1;
                 z = z + 1;
             }
-            LEAK(z);
+            OBSERVE(z);
         }
         """,
         "leakage": (31, 32)
@@ -423,7 +423,7 @@ MATestCases = {
                 H = H - 5;
                 O = O + 1;
             }
-            LEAK(O);
+            OBSERVE(O);
         }
         """,
         "leakage": (4, 32)
@@ -470,7 +470,7 @@ MATestCases = {
                     }
                 }
             }
-            LEAK(O);
+            OBSERVE(O);
         }
         """,
         "leakage": 3
@@ -488,7 +488,7 @@ MATestCases = {
                 unsigned int m = 1 << (31-i);
                 if (O + m <= S) O += m;
             }
-            LEAK(O);
+            OBSERVE(O);
         }
         """,
         "leakage": 16,
@@ -507,7 +507,7 @@ MATestCases = {
         void main(){
             int h = INPUT(int);
             int z = fib(h & 0b00000000000000000000000000011111);
-            LEAK(z);
+            OBSERVE(z);
         }
         """,
         "leakage": 0
@@ -560,9 +560,9 @@ int main() {
       m = 1;
       if (O + m <= I) O += m;
     }
-    LEAK(O);
+    OBSERVE(O);
 }
-""", lc="approxflow", mc="cbmc", unwind=8) == 8
+""", lc="approxflow", mc="cbmc", unwind=8) == pytest.approx(3.17, 0.1)
 
 
 def test_approxflow_electronic_purse():
